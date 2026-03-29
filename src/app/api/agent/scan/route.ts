@@ -51,12 +51,7 @@ async function handleScan(req: NextRequest) {
     }
 
     if (!casesToScan || casesToScan.length === 0) {
-      // No due cases — wait 5 seconds then check again (for importance-10 cases that become due)
-      if (Date.now() - startTime + 6000 < MAX_RUNTIME_MS) {
-        await new Promise(r => setTimeout(r, 5000));
-        continue;
-      }
-      break;
+      break; // No due cases — return immediately, cron will call again next minute
     }
 
     for (const c of casesToScan) {

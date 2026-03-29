@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
-type Gate = { id: string; type: string; display_name: string; status: string; created_at: string };
+type Gate = { id: string; type: string; display_name: string; status: string; metadata: Record<string, string>; created_at: string };
 // Channel type removed — deprecated
 type Entity = { id: string; type: string; canonical_name: string; status: string; phone?: string; email?: string; whatsapp_number?: string; telegram_handle?: string; website?: string; external_id?: string; created_at: string };
 
