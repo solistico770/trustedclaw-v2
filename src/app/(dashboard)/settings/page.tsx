@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
 import { DEMO_USER_ID } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,16 +19,14 @@ const TABS = [
 ];
 
 export default function SettingsPage() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const tab = searchParams.get("tab") || "prompt";
+  const [tab, setTab] = useState("prompt");
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
       <div className="flex gap-1 bg-card rounded-xl p-1">
         {TABS.map(t => (
-          <button key={t.key} onClick={() => router.push(`/settings?tab=${t.key}`)}
+          <button key={t.key} onClick={() => setTab(t.key)}
             className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${
               tab === t.key ? "bg-primary/15 text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
             }`}>{t.label}</button>

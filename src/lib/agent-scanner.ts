@@ -105,18 +105,18 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
         break;
       }
       case "propose_entity": {
-        // Check if entity already exists
+        // Check if entity already exists (active OR proposed — avoid duplicates)
         const { data: existing } = await db.from("entities")
-          .select("id").eq("user_id", userId).ilike("canonical_name", cmd.name).eq("status", "active").limit(1);
+          .select("id").eq("user_id", userId).ilike("canonical_name", cmd.name).in("status", ["active", "proposed"]).limit(1);
 
         if (existing && existing.length > 0) {
-          // Link existing to case
+          // Link existing to case (upsert — no duplicate)
           await db.from("case_entities").upsert(
             { case_id: caseId, entity_id: existing[0].id, role: cmd.role || "mentioned" },
             { onConflict: "case_id,entity_id" }
           );
         } else {
-          // Create proposed entity
+          // Create proposed entity only if truly new
           const { data: newEntity } = await db.from("entities").insert({
             user_id: userId,
             type: cmd.entity_type || "other",
