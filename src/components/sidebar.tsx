@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { ThemeToggle } from "./theme-toggle";
 
 const nav = [
   { href: "/", label: "Cases", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
@@ -43,8 +44,9 @@ export function Sidebar({ caseCount }: { caseCount?: number }) {
           );
         })}
       </nav>
-      <div className="px-5 py-3 border-t border-sidebar-border">
+      <div className="px-5 py-3 border-t border-sidebar-border flex items-center justify-between">
         <p className="text-[10px] text-muted-foreground font-mono">v2.0 · {process.env.NEXT_PUBLIC_GIT_SHA?.slice(0, 7) || "dev"}</p>
+        <ThemeToggle />
       </div>
     </aside>
   );

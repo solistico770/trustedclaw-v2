@@ -16,18 +16,18 @@ type Case = {
 };
 
 const STATUS_STYLE: Record<string, { bg: string; label: string }> = {
-  pending: { bg: "bg-amber-500/20 text-amber-300 border-amber-500/30", label: "Pending Scan" },
-  open: { bg: "bg-blue-500/20 text-blue-300 border-blue-500/30", label: "Open" },
-  action_needed: { bg: "bg-red-500/20 text-red-300 border-red-500/30", label: "Action Needed" },
-  in_progress: { bg: "bg-violet-500/20 text-violet-300 border-violet-500/30", label: "In Progress" },
-  addressed: { bg: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30", label: "Addressed" },
-  scheduled: { bg: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30", label: "Scheduled" },
-  escalated: { bg: "bg-red-600/20 text-red-200 border-red-500/30", label: "Escalated" },
-  closed: { bg: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30", label: "Closed" },
+  pending: { bg: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-500/20 dark:text-amber-300 dark:border-amber-500/30", label: "Pending Scan" },
+  open: { bg: "bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-500/20 dark:text-blue-300 dark:border-blue-500/30", label: "Open" },
+  action_needed: { bg: "bg-red-100 text-red-800 border-red-300 dark:bg-red-500/20 dark:text-red-300 dark:border-red-500/30", label: "Action Needed" },
+  in_progress: { bg: "bg-violet-100 text-violet-800 border-violet-300 dark:bg-violet-500/20 dark:text-violet-300 dark:border-violet-500/30", label: "In Progress" },
+  addressed: { bg: "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30", label: "Addressed" },
+  scheduled: { bg: "bg-cyan-100 text-cyan-800 border-cyan-300 dark:bg-cyan-500/20 dark:text-cyan-300 dark:border-cyan-500/30", label: "Scheduled" },
+  escalated: { bg: "bg-red-200 text-red-900 border-red-400 dark:bg-red-600/20 dark:text-red-200 dark:border-red-500/30", label: "Escalated" },
+  closed: { bg: "bg-zinc-100 text-zinc-600 border-zinc-300 dark:bg-zinc-500/20 dark:text-zinc-400 dark:border-zinc-500/30", label: "Closed" },
 };
 
 const URG_STYLE: Record<string, string> = {
-  immediate: "text-red-400", soon: "text-orange-400", normal: "text-blue-400", low: "text-zinc-500",
+  immediate: "text-red-600 dark:text-red-400", soon: "text-orange-600 dark:text-orange-400", normal: "text-blue-600 dark:text-blue-400", low: "text-zinc-500",
 };
 
 function ImportanceBar({ level }: { level: number }) {
@@ -149,9 +149,9 @@ export default function CasesBoard() {
                   {/* Importance indicator */}
                   <div className="flex flex-col items-center gap-1 pt-0.5">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold ${
-                      c.importance >= 8 ? "bg-red-500/15 text-red-400" :
-                      c.importance >= 5 ? "bg-amber-500/15 text-amber-400" :
-                      "bg-blue-500/15 text-blue-400"
+                      c.importance >= 8 ? "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400" :
+                      c.importance >= 5 ? "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400" :
+                      "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400"
                     }`}>
                       {c.importance}
                     </div>
