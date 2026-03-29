@@ -44,7 +44,7 @@ export function Sidebar({ caseCount }: { caseCount?: number }) {
         })}
       </nav>
       <div className="px-5 py-3 border-t border-sidebar-border">
-        <p className="text-[10px] text-muted-foreground">v2.0</p>
+        <p className="text-[10px] text-muted-foreground font-mono">v2.0 · {process.env.NEXT_PUBLIC_GIT_SHA?.slice(0, 7) || "dev"}</p>
       </div>
     </aside>
   );
