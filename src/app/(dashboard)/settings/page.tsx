@@ -206,11 +206,14 @@ function GatesTab() {
   const [showForm, setShowForm] = useState(false);
   const [type, setType] = useState("whatsapp");
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [connPhone, setConnPhone] = useState("");
+  const [connToken, setConnToken] = useState("");
+  const [connWebhook, setConnWebhook] = useState("");
 
   const load = useCallback(async () => {
-    const db = (await import("@/lib/supabase-browser")).createBrowserClient();
-    const { data } = await db.from("gates").select("*").eq("user_id", DEMO_USER_ID).order("created_at");
-    if (data) setGates(data);
+    const data = await (await fetch(`/api/gates?user_id=${DEMO_USER_ID}`)).json();
+    if (Array.isArray(data)) setGates(data);
     setLoading(false);
   }, []);
 
@@ -218,51 +221,120 @@ function GatesTab() {
 
   async function create() {
     if (!name.trim()) return;
-    const db = (await import("@/lib/supabase-server")).createServiceClient();
-    await db.from("gates").insert({ user_id: DEMO_USER_ID, type, display_name: name, status: "active" });
-    setName(""); setShowForm(false); load();
+    const metadata: Record<string, string> = {};
+    if (connPhone) metadata.phone = connPhone;
+    if (connToken) metadata.token = connToken;
+    if (connWebhook) metadata.webhook_url = connWebhook;
+
+    await fetch("/api/gates", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: DEMO_USER_ID, type, display_name: name, description, metadata }),
+    });
+    setName(""); setDescription(""); setConnPhone(""); setConnToken(""); setConnWebhook(""); setShowForm(false); load();
   }
+
+  async function remove(id: string) {
+    await fetch(`/api/gates/${id}`, { method: "DELETE" }); load();
+  }
+
+  const GATE_ICONS: Record<string, string> = {
+    whatsapp: "WA", telegram: "TG", email: "EM", slack: "SL", phone: "PH", webhook: "WH", simulator: "SM", generic: "GN",
+  };
 
   return (
     <div className="space-y-4 max-w-2xl">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">Connection points to communication platforms</p>
-        <Button size="sm" onClick={() => setShowForm(!showForm)}>{showForm ? "Cancel" : "Add Gate"}</Button>
+        <div>
+          <p className="text-sm text-muted-foreground">Gates are connection points to communication platforms.</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Each gate has a name, description, and connection metadata.</p>
+        </div>
+        <Button size="sm" onClick={() => { setShowForm(!showForm); setName(""); setDescription(""); }}>{showForm ? "Cancel" : "Add Gate"}</Button>
       </div>
+
       {showForm && (
         <Card className="border-primary/30">
-          <CardContent className="p-4 flex gap-3 items-end">
-            <div className="flex-1">
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
-              <Input value={name} onChange={e => setName(e.target.value)} placeholder="My WhatsApp" className="h-9 text-sm" />
+          <CardContent className="p-5 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Gate Name *</label>
+                <Input value={name} onChange={e => setName(e.target.value)} placeholder="My WhatsApp" className="h-9 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Type *</label>
+                <select className="w-full h-9 bg-input border border-border rounded-lg px-3 text-sm" value={type} onChange={e => setType(e.target.value)}>
+                  {["whatsapp","telegram","email","slack","phone","webhook","simulator","generic"].map(t => <option key={t}>{t}</option>)}
+                </select>
+              </div>
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Type</label>
-              <select className="h-9 bg-input border border-border rounded-lg px-3 text-sm" value={type} onChange={e => setType(e.target.value)}>
-                {["whatsapp","telegram","email","slack","phone","webhook","simulator","generic"].map(t => <option key={t}>{t}</option>)}
-              </select>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Description</label>
+              <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Personal WhatsApp, Business Telegram..." className="h-9 text-sm" />
             </div>
-            <Button onClick={create} disabled={!name.trim()} className="bg-primary h-9">Create</Button>
+            <div className="border-t border-border/50 pt-3">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Connection Details</p>
+              <div className="grid grid-cols-2 gap-3">
+                {(type === "whatsapp" || type === "phone") && (
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Phone Number</label>
+                    <Input value={connPhone} onChange={e => setConnPhone(e.target.value)} placeholder="+972..." className="h-9 text-sm font-mono" />
+                  </div>
+                )}
+                {(type === "telegram" || type === "slack") && (
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Bot Token / API Key</label>
+                    <Input value={connToken} onChange={e => setConnToken(e.target.value)} placeholder="bot123:ABC..." className="h-9 text-sm font-mono" type="password" />
+                  </div>
+                )}
+                {type === "webhook" && (
+                  <div className="col-span-2">
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Webhook URL</label>
+                    <Input value={connWebhook} onChange={e => setConnWebhook(e.target.value)} placeholder="https://..." className="h-9 text-sm font-mono" />
+                  </div>
+                )}
+                {type === "email" && (
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Email Address</label>
+                    <Input value={connPhone} onChange={e => setConnPhone(e.target.value)} placeholder="inbox@..." className="h-9 text-sm" />
+                  </div>
+                )}
+              </div>
+            </div>
+            <Button onClick={create} disabled={!name.trim()} className="bg-primary">Create Gate</Button>
           </CardContent>
         </Card>
       )}
+
       {loading ? <div className="h-16 bg-card rounded-xl animate-pulse" /> :
-        gates.length === 0 ? <p className="text-muted-foreground text-sm text-center py-8">No gates yet</p> :
-        gates.map(g => (
-          <Card key={g.id} className="border-border/50">
-            <CardContent className="p-4 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-primary/10 dark:bg-primary/15 flex items-center justify-center text-primary text-xs font-bold">{g.type.slice(0,2).toUpperCase()}</div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">{g.display_name}</span>
-                  <Badge variant="secondary" className="text-[10px]">{g.type}</Badge>
-                  <Badge variant="outline" className={`text-[10px] ${g.status === "active" ? "text-emerald-600 dark:text-emerald-400 border-emerald-300 dark:border-emerald-500/30" : "text-red-600 dark:text-red-400"}`}>{g.status}</Badge>
+        gates.length === 0 ? <p className="text-muted-foreground text-sm text-center py-8">No gates yet. Add your first connection.</p> :
+        gates.map(g => {
+          const meta = (g.metadata || {}) as Record<string, string>;
+          return (
+            <Card key={g.id} className="border-border/50">
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 dark:bg-primary/15 flex items-center justify-center text-primary text-xs font-bold shrink-0">
+                    {GATE_ICONS[g.type] || "??"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="font-semibold text-sm">{g.display_name}</span>
+                      <Badge variant="secondary" className="text-[10px]">{g.type}</Badge>
+                      <Badge variant="outline" className={`text-[10px] ${g.status === "active" ? "text-emerald-600 dark:text-emerald-400 border-emerald-300 dark:border-emerald-500/30" : "text-red-600 dark:text-red-400"}`}>{g.status}</Badge>
+                    </div>
+                    {meta.description && <p className="text-xs text-muted-foreground">{meta.description}</p>}
+                    <div className="flex gap-3 mt-1.5 text-[11px] text-muted-foreground flex-wrap">
+                      {meta.phone && <span>Phone: <span className="font-mono">{meta.phone}</span></span>}
+                      {meta.token && <span>Token: <span className="font-mono">••••{meta.token.slice(-4)}</span></span>}
+                      {meta.webhook_url && <span>Webhook: <span className="font-mono">{meta.webhook_url.slice(0, 30)}...</span></span>}
+                      <span className="font-mono text-[10px] opacity-50">{g.id.slice(0, 8)}</span>
+                    </div>
+                  </div>
+                  <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive shrink-0" onClick={() => remove(g.id)}>Remove</Button>
                 </div>
-                <p className="text-[10px] text-muted-foreground font-mono mt-0.5">{g.id.slice(0, 8)}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+              </CardContent>
+            </Card>
+          );
+        })}
     </div>
   );
 }
