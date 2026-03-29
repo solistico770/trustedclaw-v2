@@ -1,26 +1,25 @@
 "use client";
-import { Sidebar } from "@/components/sidebar";
 import { useEffect, useState } from "react";
 import { createBrowserClient } from "@/lib/supabase-browser";
-import { DEMO_USER_ID } from "@/lib/constants";
+import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
+import { AppSidebar } from "@/components/app-sidebar";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [caseCount, setCaseCount] = useState(0);
-  const [adminName, setAdminName] = useState<string | undefined>();
+  const [userEmail, setUserEmail] = useState<string | undefined>();
   const supabase = createBrowserClient();
 
   useEffect(() => {
     async function load() {
-      const { count } = await supabase.from("cases").select("*", { count: "exact", head: true })
-        .eq("user_id", DEMO_USER_ID).not("status", "in", '("closed","merged")');
-      setCaseCount(count || 0);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-      // Get admin name
-      const { data: settings } = await supabase.from("user_settings").select("admin_entity_id").eq("user_id", DEMO_USER_ID).single();
-      if (settings?.admin_entity_id) {
-        const { data: admin } = await supabase.from("entities").select("canonical_name").eq("id", settings.admin_entity_id).single();
-        if (admin) setAdminName(admin.canonical_name);
-      }
+      setUserEmail(user.email || undefined);
+
+      const { count } = await supabase.from("cases").select("*", { count: "exact", head: true })
+        .eq("user_id", user.id).not("status", "in", '("closed","merged")');
+      setCaseCount(count || 0);
     }
     load();
     const ch = supabase.channel("case-count").on("postgres_changes", { event: "*", schema: "public", table: "cases" }, () => load()).subscribe();
@@ -28,11 +27,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [supabase]);
 
   return (
-    <div className="flex min-h-screen" dir="rtl">
-      <div className="flex-1 overflow-auto bg-background">
-        <main className="p-8 max-w-5xl mx-auto">{children}</main>
-      </div>
-      <Sidebar caseCount={caseCount} adminName={adminName} />
-    </div>
+    <TooltipProvider>
+      <SidebarProvider>
+        <AppSidebar caseCount={caseCount} userEmail={userEmail} />
+        <SidebarInset>
+          <header className="flex h-12 items-center gap-2 border-b border-border px-4">
+            <SidebarTrigger />
+          </header>
+          <main className="p-6 max-w-5xl mx-auto">{children}</main>
+        </SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
   );
 }

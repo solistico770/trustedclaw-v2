@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { DEMO_USER_ID } from "@/lib/constants";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,7 +23,7 @@ export default function ScanMonitorPage() {
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const data = await (await fetch(`/api/scan-logs?user_id=${DEMO_USER_ID}`)).json();
+    const data = await (await fetch(`/api/scan-logs`)).json();
     if (Array.isArray(data)) setLogs(data);
     setLoading(false);
   }, []);

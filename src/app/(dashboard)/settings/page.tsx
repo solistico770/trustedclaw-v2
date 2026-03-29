@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { DEMO_USER_ID } from "@/lib/constants";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,14 +47,14 @@ function PromptTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/settings/context-prompt?user_id=${DEMO_USER_ID}`)
+    fetch(`/api/settings/context-prompt`)
       .then(r => r.json()).then(d => { setPrompt(d.context_prompt || ""); setLoading(false); });
   }, []);
 
   async function save() {
     await fetch("/api/settings/context-prompt", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: DEMO_USER_ID, context_prompt: prompt }),
+      body: JSON.stringify({ context_prompt: prompt }),
     });
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   }
@@ -89,7 +89,7 @@ function SkillsTab() {
   const [autoAttach, setAutoAttach] = useState(false);
 
   const load = useCallback(async () => {
-    const data = await (await fetch(`/api/skills?user_id=${DEMO_USER_ID}`)).json();
+    const data = await (await fetch(`/api/skills`)).json();
     if (Array.isArray(data)) setSkills(data);
     setLoading(false);
   }, []);
@@ -101,7 +101,7 @@ function SkillsTab() {
     if (editingId) {
       await fetch(`/api/skills/${editingId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, summary, instructions, auto_attach: autoAttach }) });
     } else {
-      await fetch("/api/skills", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: DEMO_USER_ID, name, summary, instructions, auto_attach: autoAttach }) });
+      await fetch("/api/skills", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, summary, instructions, auto_attach: autoAttach }) });
     }
     resetForm(); load();
   }
@@ -210,7 +210,7 @@ function GatesTab() {
   const [connWebhook, setConnWebhook] = useState("");
 
   const load = useCallback(async () => {
-    const data = await (await fetch(`/api/gates?user_id=${DEMO_USER_ID}`)).json();
+    const data = await (await fetch(`/api/gates`)).json();
     if (Array.isArray(data)) setGates(data);
     setLoading(false);
   }, []);
@@ -226,7 +226,7 @@ function GatesTab() {
 
     await fetch("/api/gates", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: DEMO_USER_ID, type, display_name: name, description, metadata }),
+      body: JSON.stringify({ type, display_name: name, description, metadata }),
     });
     setName(""); setDescription(""); setConnPhone(""); setConnToken(""); setConnWebhook(""); setShowForm(false); load();
   }
@@ -346,7 +346,7 @@ function EntitiesTab() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
-    const params = `user_id=${DEMO_USER_ID}${statusFilter !== "all" ? `&status=${statusFilter}` : ""}${q ? `&q=${q}` : ""}`;
+    const params = `${statusFilter !== "all" ? `status=${statusFilter}` : ""}${q ? `${statusFilter !== "all" ? "&" : ""}q=${q}` : ""}`;
     const data = await (await fetch(`/api/entities?${params}`)).json();
     if (Array.isArray(data)) setEntities(data);
     setLoading(false);

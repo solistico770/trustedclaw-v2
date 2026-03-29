@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { DEMO_USER_ID } from "@/lib/constants";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,7 +18,7 @@ export default function SimulatePage() {
   const [result, setResult] = useState<{ message_id: string; case_id: string } | null>(null);
 
   const loadGates = useCallback(async () => {
-    const data = await (await fetch(`/api/gates?user_id=${DEMO_USER_ID}`)).json();
+    const data = await (await fetch(`/api/gates`)).json();
     if (Array.isArray(data)) {
       setGates(data);
       if (data.length > 0 && !gateId) setGateId(data[0].id);
@@ -33,14 +33,12 @@ export default function SimulatePage() {
   async function send() {
     if (!content.trim() || !gateId) return;
     setSending(true); setResult(null);
-    const data = await (await fetch("/api/messages/ingest", {
+    const data = await (await fetch("/api/simulate", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        gate_id: gateId,
         gate_type: selectedGate?.type || "generic",
         sender_name: isAdmin ? "Admin" : (sender || "Unknown"),
-        content,
-        user_id: DEMO_USER_ID,
+        message_content: content,
       }),
     })).json();
     setResult(data); setSending(false);

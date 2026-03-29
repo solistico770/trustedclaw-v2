@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, isAuthError } from "@/lib/require-admin";
 import { createServiceClient } from "@/lib/supabase-server";
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
   const { id } = await params;
   const db = createServiceClient();
   await db.from("channels").update({ is_active: false }).eq("id", id);
@@ -9,6 +12,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
   const { id } = await params;
   const body = await req.json();
   const db = createServiceClient();

@@ -1,55 +1,57 @@
-## 1. Database — Profiles table & trigger
+## 1. Fix v4 bug
 
-- [ ] 1.1 Create migration: `profiles` table (id, role, display_name, created_at) with FK to auth.users
-- [ ] 1.2 Create migration: `handle_new_user()` trigger — first user gets admin, rest get pending
-- [ ] 1.3 Add RLS policy on profiles: users can read own profile, admins can read/update all
-- [ ] 1.4 Run migration against Supabase
+- [x] 1.1 Verified: `existingEntityNames` param already present in second `callAgent` call — no bug
 
-## 2. Auth — Supabase login/signup flows
+## 2. Database — profiles table
 
-- [ ] 2.1 Update `src/lib/supabase-browser.ts` — use `createBrowserClient` from `@supabase/ssr` with anon key
-- [ ] 2.2 Update `src/lib/supabase-server.ts` — use `createServerClient` from `@supabase/ssr` with cookie handling
-- [ ] 2.3 Create `/login/page.tsx` — phone OTP + email magic link forms (shadcn card/input/button)
-- [ ] 2.4 Create `/auth/callback/route.ts` — handle magic link redirect, exchange code for session
-- [ ] 2.5 Create `/auth/confirm/route.ts` — handle OTP verification if needed
+- [x] 2.1 Created migration: profiles table + handle_new_user trigger (first=admin, rest=pending)
+- [x] 2.2 Added RLS on profiles: users read own, admins read/update all, service role full
 
-## 3. Auth middleware — proxy.ts
+## 3. Supabase clients rewrite
 
-- [ ] 3.1 Create `src/proxy.ts` — read session, redirect unauthenticated to /login, allow /login + /auth/* through
-- [ ] 3.2 In proxy: check `profiles.role` — if pending, redirect to `/waiting` page
-- [ ] 3.3 Create `/waiting/page.tsx` — "Waiting for admin approval" screen with logout button
+- [x] 3.1 Rewrote `supabase-browser.ts` — `createBrowserClient` from `@supabase/ssr` (anon key, cookies)
+- [x] 3.2 Rewrote `supabase-server.ts` — added `createServerClient` (cookie-based for API routes), kept `createServiceClient` for cron
+- [x] 3.3 Created `src/lib/require-admin.ts` — getUser + check profile.role → 401/403 or { user, profile, supabase }
 
-## 4. API protection
+## 4. Auth pages + proxy
 
-- [ ] 4.1 Create `src/lib/require-admin.ts` helper — getUser + check profile.role, return 401/403 or { user, profile }
-- [ ] 4.2 Add auth check to all API routes (cases, entities, labels, settings, scan-logs, audit, skills, gates)
-- [ ] 4.3 Replace all `DEMO_USER_ID` / hardcoded UUID references with `user.id` from session
-- [ ] 4.4 Keep `/api/messages/ingest` and `/api/agent/scan` using their own auth (cron secret / API key)
-- [ ] 4.5 Delete `DEMO_USER_ID` from `src/lib/constants.ts`
+- [x] 4.1 Created `src/app/login/page.tsx` — email input → magic link (shadcn card/input/button)
+- [x] 4.2 Created `src/app/auth/callback/route.ts` — exchange code for session
+- [x] 4.3 Created `src/app/waiting/page.tsx` — "Waiting for admin approval" + logout
+- [x] 4.4 Created `src/proxy.ts` — session check, redirect to /login or /waiting, pass through public paths
 
-## 5. shadcn dashboard layout
+## 5. API routes — add auth
 
-- [ ] 5.1 Add shadcn components: sidebar, sheet, dropdown-menu, avatar, separator, chart (via `npx shadcn@latest add`)
-- [ ] 5.2 Rewrite `src/app/(dashboard)/layout.tsx` — shadcn sidebar + header + user menu + RTL
-- [ ] 5.3 Create sidebar nav config: Cases, Entities, Scanner, Simulate, Settings (with icons)
-- [ ] 5.4 Add user dropdown in header: display name/email, role badge, logout button
-- [ ] 5.5 Verify RTL: sidebar on right, text direction, icon positions
-- [ ] 5.6 Verify dark mode works with new layout
+- [x] 5.1 Updated cases routes (route.ts, [id], stats, status, importance, close) — requireAdmin + user.id
+- [x] 5.2 Updated entities routes (route.ts, [id], approve, reject, labels, batch, merge) — requireAdmin + user.id
+- [x] 5.3 Updated remaining routes (audit, labels, gates, channels, scan-logs, settings, skills, simulate) — requireAdmin + user.id
+- [x] 5.4 Kept `/api/messages/ingest` and `/api/agent/scan` using service client (no session)
+- [x] 5.5 Deleted DEMO_USER_ID from constants.ts, removed all references
 
-## 6. User management (admin)
+## 6. shadcn Sidebar + layout
 
-- [ ] 6.1 Create `/settings/users/page.tsx` — list all users, show role, email/phone, created_at
-- [ ] 6.2 Add role change buttons: "Make Admin", "Block" per user row
-- [ ] 6.3 Create `/api/users/route.ts` — GET (list), PATCH (update role) — admin only
-- [ ] 6.4 Add "Users" link to Settings section in sidebar nav
+- [x] 6.1 Installed shadcn components: sidebar, sheet, dropdown-menu, avatar, tooltip
+- [x] 6.2 Created `src/components/app-sidebar.tsx` — shadcn Sidebar with SidebarProvider, collapsible, mobile sheet
+- [x] 6.3 Rewrote `src/app/(dashboard)/layout.tsx` — SidebarProvider wrapper, get user session for sidebar
+- [x] 6.4 Added user menu in sidebar footer: email, theme toggle, logout button
+- [x] 6.5 RTL support via side="right"
 
-## 7. Cleanup & test
+## 7. User management
 
-- [ ] 7.1 Audit all Supabase client usages — browser uses anon key, server uses service role only when needed
-- [ ] 7.2 Remove any remaining DEMO_USER_ID references (grep entire codebase)
-- [ ] 7.3 Test: sign up first user → gets admin
-- [ ] 7.4 Test: sign up second user → gets pending → sees waiting screen
-- [ ] 7.5 Test: admin promotes second user → they can access dashboard
-- [ ] 7.6 Test: all API routes reject unauthenticated calls (401)
-- [ ] 7.7 Test: dashboard renders with shadcn layout, sidebar, RTL, dark mode
-- [ ] 7.8 Document: README note about enabling Phone provider in Supabase dashboard
+- [x] 7.1 Created `src/app/api/users/route.ts` — GET list all, PATCH update role (admin only)
+- [x] 7.2 Created `src/app/(dashboard)/settings/users/page.tsx` — table with promote/block buttons
+- [x] 7.3 Added "Users" nav item in sidebar
+
+## 8. Dashboard client updates
+
+- [x] 8.1 Updated all dashboard pages — removed DEMO_USER_ID, removed user_id query params from all fetches
+- [x] 8.2 Layout.tsx gets user email from session for sidebar
+- [x] 8.3 Simulate page now calls /api/simulate instead of /api/messages/ingest directly
+
+## 9. Test
+
+- [x] 9.1 Build succeeds (tsc --noEmit passes)
+- [ ] 9.2 Login flow works (email magic link) — needs Supabase Auth enabled
+- [ ] 9.3 First user gets admin — needs profiles migration run
+- [ ] 9.4 API routes reject unauthenticated (401) and non-admin (403)
+- [ ] 9.5 Dashboard renders with sidebar, RTL, dark mode

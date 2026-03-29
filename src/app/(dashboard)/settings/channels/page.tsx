@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { DEMO_USER_ID } from "@/lib/constants";
+import { createBrowserClient } from "@/lib/supabase-browser";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,19 +20,12 @@ export default function ChannelsPage() {
   const [externalId, setExternalId] = useState("");
 
   const load = useCallback(async () => {
-    const [chData, gData] = await Promise.all([
-      fetch(`/api/channels?user_id=${DEMO_USER_ID}`).then(r => r.json()),
-      fetch(`/api/channels?user_id=${DEMO_USER_ID}`).then(() =>
-        fetch(`/api/channels?user_id=${DEMO_USER_ID}`).then(r => r.json()) // gates loaded from channels
-      ),
+    const [chData, gateData] = await Promise.all([
+      fetch(`/api/channels`).then(r => r.json()),
+      fetch(`/api/gates`).then(r => r.json()),
     ]);
     if (Array.isArray(chData)) setChannels(chData);
-    // Fetch gates separately
-    const gateRes = await fetch(`https://pcxwtdsougzlzvjmlbvt.supabase.co/rest/v1/gates?user_id=eq.${DEMO_USER_ID}&select=id,type,display_name`, {
-      headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "" },
-    });
-    const gateList = await gateRes.json().catch(() => []);
-    if (Array.isArray(gateList)) setGates(gateList);
+    if (Array.isArray(gateData)) setGates(gateData);
     setLoading(false);
   }, []);
 
@@ -42,7 +35,7 @@ export default function ChannelsPage() {
     if (!name.trim()) return;
     await fetch("/api/channels", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: DEMO_USER_ID, name, description: description || null, gate_id: gateId || null, external_id: externalId || null }),
+      body: JSON.stringify({ name, description: description || null, gate_id: gateId || null, external_id: externalId || null }),
     });
     setName(""); setDescription(""); setGateId(""); setExternalId(""); setShowForm(false);
     load();

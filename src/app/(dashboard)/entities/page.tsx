@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { DEMO_USER_ID } from "@/lib/constants";
+
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,7 +24,7 @@ export default function EntitiesPage() {
   const router = useRouter();
 
   const load = useCallback(async () => {
-    const params = `user_id=${DEMO_USER_ID}&status=active${q ? `&q=${q}` : ""}${typeFilter ? `&type=${typeFilter}` : ""}`;
+    const params = `status=active${q ? `&q=${q}` : ""}${typeFilter ? `&type=${typeFilter}` : ""}`;
     const data = await (await fetch(`/api/entities?${params}`)).json();
     if (Array.isArray(data)) setEntities(data);
     setLoading(false);

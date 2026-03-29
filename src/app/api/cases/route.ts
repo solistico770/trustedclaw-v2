@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase-server";
+import { requireAdmin, isAuthError } from "@/lib/require-admin";
 
 export async function GET(req: NextRequest) {
-  const sp = req.nextUrl.searchParams;
-  const userId = sp.get("user_id");
-  if (!userId) return NextResponse.json({ error: "user_id required" }, { status: 400 });
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
+  const { user, supabase } = auth;
 
-  const db = createServiceClient();
-  let query = db.from("cases")
+  const sp = req.nextUrl.searchParams;
+  let query = supabase.from("cases")
     .select("*, case_entities(entity_id, role, entities(id, canonical_name, type, status))")
-    .eq("user_id", userId);
+    .eq("user_id", user.id);
 
   const status = sp.get("status");
   if (status) query = query.in("status", status.split(","));

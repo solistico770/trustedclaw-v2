@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, isAuthError } from "@/lib/require-admin";
 import { createServiceClient } from "@/lib/supabase-server";
 
-export async function GET(req: NextRequest) {
-  const userId = req.nextUrl.searchParams.get("user_id");
-  if (!userId) return NextResponse.json({ error: "user_id required" }, { status: 400 });
+export async function GET() {
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.user.id;
+
   const db = createServiceClient();
   const { data, error } = await db.from("gates").select("*").eq("user_id", userId).order("created_at");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -11,12 +14,16 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
+  const userId = auth.user.id;
+
   const body = await req.json();
-  const { user_id, type, display_name, description, metadata } = body;
-  if (!user_id || !type || !display_name) return NextResponse.json({ error: "user_id, type, display_name required" }, { status: 400 });
+  const { type, display_name, description, metadata } = body;
+  if (!type || !display_name) return NextResponse.json({ error: "type, display_name required" }, { status: 400 });
   const db = createServiceClient();
   const { data, error } = await db.from("gates").insert({
-    user_id, type, display_name, status: "active",
+    user_id: userId, type, display_name, status: "active",
     metadata: { description: description || "", ...metadata },
   }).select().single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

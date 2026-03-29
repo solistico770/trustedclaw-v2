@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase-server";
+import { requireAdmin, isAuthError } from "@/lib/require-admin";
 
 export async function GET(req: NextRequest) {
-  const sp = req.nextUrl.searchParams;
-  const userId = sp.get("user_id");
-  if (!userId) return NextResponse.json({ error: "user_id required" }, { status: 400 });
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
+  const { user, supabase } = auth;
 
-  const db = createServiceClient();
-  let query = db.from("entities").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(100);
+  const sp = req.nextUrl.searchParams;
+  let query = supabase.from("entities").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(100);
 
   const status = sp.get("status");
   if (status) query = query.eq("status", status);

@@ -1,42 +1,38 @@
 ## Context
 
-TrustedClaw is a Next.js 16 app with Supabase backend. Currently zero auth — hardcoded DEMO_USER_ID in `src/lib/constants.ts`. All 30+ API routes pass `user_id` as a query param. Dashboard is hand-rolled with basic shadcn components (button, card, input, badge, tabs) and a custom sidebar. RLS is enabled on all tables checking `auth.uid() = user_id`, but since no user is authenticated, the app uses the service role key everywhere.
+Next.js 16 + Supabase app. Zero auth — hardcoded DEMO_USER_ID. All 28 API routes take `user_id` as query param and use service role key. Browser client is raw `createClient` (not cookie-based). Custom sidebar works but no collapse/mobile/user menu. RLS exists on all tables checking `auth.uid() = user_id` but is bypassed by service role usage.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Real auth via Supabase Auth (phone OTP + email magic link)
-- First signup = admin, subsequent signups = pending (need admin approval)
-- All dashboard pages and API routes protected — admin only
-- Replace dashboard layout with shadcn dashboard template (sidebar, header, responsive)
-- Keep RTL/Hebrew support
-- Remove DEMO_USER_ID entirely
+- Email magic link auth via Supabase Auth
+- First signup = admin, rest = pending
+- All routes protected (proxy.ts + API helper)
+- Session-based auth replaces user_id query param everywhere
+- shadcn Sidebar component with collapse, mobile, user menu
+- Fix v4 bug (missing param in second callAgent)
 
 **Non-Goals:**
-- Social login (Google, GitHub, etc.) — not needed now
-- Password-based auth — phone OTP and magic link only
-- Multi-tenant / multi-org — single admin pool
-- Redesigning individual page content (cases board, entity list, etc.) — just the shell/layout
-- Mobile app auth
+- Phone OTP (needs Twilio — add later)
+- Social login
+- Redesigning page content — only the shell/layout
+- Multi-tenant/multi-org
 
 ## Decisions
 
-### 1. Auth provider — Supabase Auth native
+### 1. Email magic link only (no phone)
 
-Use Supabase's built-in auth, not Clerk/Auth0/NextAuth. Already have Supabase set up, RLS policies reference `auth.uid()`, and phone OTP + email magic link are supported natively.
+Phone OTP requires Twilio setup in Supabase dashboard + costs money. Email magic link works out of the box with Supabase Auth. Add phone later if needed.
 
-**Requires manual step**: user must enable Phone provider in Supabase Dashboard → Authentication → Providers.
+### 2. Cookie-based Supabase clients via @supabase/ssr
 
-### 2. Session management — `@supabase/ssr`
+**Browser client** — `createBrowserClient(url, anonKey)` from `@supabase/ssr`. Stores session in cookies, works with RLS.
 
-Already in `package.json`. Use cookie-based sessions via `createServerClient` in `proxy.ts` and API routes. Browser client uses `createBrowserClient` from `@supabase/ssr`.
+**Server client (API routes)** — `createServerClient(url, anonKey, { cookies })` from `@supabase/ssr`. Reads cookies from request. Used in all API route handlers. RLS enforces user isolation automatically.
 
-Flow:
-1. `proxy.ts` reads session cookie → if no session, redirect to `/login`
-2. If session exists, check `profiles.role` → if not admin, show waiting screen
-3. API routes: create Supabase client from cookies, get `auth.getUser()`, check role
+**Service client (cron/scanner)** — keep existing `createClient(url, serviceRoleKey)` for background jobs (cron scan, message ingest) that don't have a user session.
 
-### 3. Profiles table with trigger
+### 3. Profiles table
 
 ```sql
 CREATE TABLE profiles (
@@ -46,11 +42,9 @@ CREATE TABLE profiles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Auto-create profile on signup
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
-DECLARE
-  user_count INT;
+DECLARE user_count INT;
 BEGIN
   SELECT COUNT(*) INTO user_count FROM profiles;
   INSERT INTO profiles (id, role)
@@ -64,50 +58,60 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE FUNCTION handle_new_user();
 ```
 
-First user gets `admin`, everyone else gets `pending`. Race condition is negligible — first signup in a fresh system.
+### 4. API route pattern — requireAdmin helper
 
-### 4. API protection pattern
-
-Every API route handler:
 ```typescript
-const supabase = await createClient(); // from cookies
-const { data: { user } } = await supabase.auth.getUser();
-if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
-if (profile?.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-
-// Use user.id instead of DEMO_USER_ID
+// src/lib/require-admin.ts
+export async function requireAdmin(req: NextRequest) {
+  const supabase = createServerClient(cookies);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
+  if (profile?.role !== "admin") return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  return { user, profile, supabase };
+}
 ```
 
-Extract this into a helper `requireAdmin(supabase)` that returns `{ user, profile }` or throws.
+Every API route changes from:
+```typescript
+const userId = sp.get("user_id");
+const db = createServiceClient();
+```
+To:
+```typescript
+const auth = await requireAdmin(req);
+if ("error" in auth) return auth.error;
+const { user, supabase } = auth;
+// user.id replaces userId, supabase replaces db
+```
 
-### 5. shadcn dashboard layout
+### 5. proxy.ts
 
-Use `npx shadcn@latest add sidebar-07` (or appropriate dashboard block) as the base. It includes:
-- Collapsible sidebar with icons
-- Header with user avatar/dropdown
-- Responsive (mobile = sheet drawer)
-- Dark mode ready
+```typescript
+// src/proxy.ts — at same level as app/
+const publicPaths = ["/login", "/auth/callback", "/waiting", "/api/messages/ingest", "/api/agent/scan"];
 
-Adapt nav items: Cases, Entities, Scanner, Simulate, Settings. Add user menu with logout. Keep `dir="rtl"` on html.
+// If public path → pass through
+// If no session → redirect /login
+// If session but role != admin → redirect /waiting
+// If admin → pass through
+```
 
-### 6. Login page
+### 6. shadcn Sidebar
 
-Simple page at `/login` with two options:
-- Phone number input → OTP verification
-- Email input → magic link sent
+Install: `npx shadcn@latest add sidebar sheet dropdown-menu avatar`
 
-Use shadcn card + input + button. No password fields.
+Use `SidebarProvider` + `Sidebar` + `SidebarContent` + `SidebarGroup` + `SidebarMenuItem` from shadcn. Keep current nav items (Cases, Entities, Simulate, Scanner, Settings). Add user menu in `SidebarFooter` with avatar, email, logout. Mobile: `SidebarTrigger` opens sheet.
 
-### 7. Remove DEMO_USER_ID
+RTL: sidebar renders on right via `dir="rtl"` on html. shadcn sidebar respects this.
 
-Delete from `src/lib/constants.ts`. Search all files for the UUID `d1f03088-b350-49f0-92de-24dc3bf1f64d` and replace with `user.id` from session. The Supabase client created from cookies will automatically scope RLS queries to the authenticated user — so for browser-side queries we can switch from service role to anon key + RLS.
+### 7. Fix v4 bug
+
+`agent-scanner.ts` line 114-117: second `callAgent` call passes `previousSummary` as 7th arg but is missing `existingEntityNames` (6th arg). Fix: add `existingEntityNames` parameter.
 
 ## Risks / Trade-offs
 
-- **Phone OTP costs money** — Supabase uses Twilio under the hood. Free tier has limits. → Mitigation: also offer email magic link as free alternative.
-- **First-user race condition** — if two people sign up simultaneously, both could get admin. → Mitigation: use `SELECT COUNT(*) ... FOR UPDATE` or accept it (extremely unlikely on fresh deploy).
-- **Service role key exposure** — currently used in browser client. After auth, browser should use anon key + RLS. → Mitigation: audit all Supabase client usages, switch browser to anon key.
-- **Supabase dashboard manual step** — Phone provider must be enabled manually. → Mitigation: document in README, fail gracefully if phone auth not configured.
-- **shadcn dashboard template may need RTL adjustments** — sidebar direction, icon positions. → Mitigation: test and adjust with `dir="rtl"` and Tailwind RTL utilities.
+- **All 28 API routes need auth added** — big changeset but mechanical. Each route is ~3 lines changed.
+- **Browser client switch to anon key** — RLS now enforces access. Must verify all queries work with RLS (they should — policies already exist).
+- **Service role still needed for cron** — scanner and ingest run without user session. Keep service client for those.
+- **Email delivery** — Supabase has built-in email for dev. Production needs custom SMTP (Resend, etc.).

@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase-browser";
-import { DEMO_USER_ID } from "@/lib/constants";
 import { URGENCY_LABELS, IMPORTANCE_LABELS, LEVEL_COLORS, getScanIntervalSeconds, getScanIntervalLabel } from "@/lib/scan-intervals";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -70,8 +69,8 @@ export default function CasesBoard() {
     // "critical" is not a status — it's urgency<=1. Fetch all open, filter client-side.
     const statusFilter = (dashFilter === "critical") ? "" : (dashFilter || filter);
     const [casesData, statsData] = await Promise.all([
-      fetch(`/api/cases?user_id=${DEMO_USER_ID}${statusFilter ? `&status=${statusFilter}` : ""}`).then(r => r.json()),
-      fetch(`/api/cases/stats?user_id=${DEMO_USER_ID}`).then(r => r.json()),
+      fetch(`/api/cases${statusFilter ? `?status=${statusFilter}` : ""}`).then(r => r.json()),
+      fetch(`/api/cases/stats`).then(r => r.json()),
     ]);
     if (Array.isArray(casesData)) setCases(casesData);
     if (statsData.attention !== undefined) setStats(statsData);
@@ -93,7 +92,7 @@ export default function CasesBoard() {
 
   async function act(caseId: string, action: string) {
     const endpoint = action === "close" ? `/api/cases/${caseId}/close` : `/api/cases/${caseId}/status`;
-    const body = action === "close" ? { user_id: DEMO_USER_ID, reason: "Closed" } : { user_id: DEMO_USER_ID, status: action };
+    const body = action === "close" ? { reason: "Closed" } : { status: action };
     await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     load();
   }

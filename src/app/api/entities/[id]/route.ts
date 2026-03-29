@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, isAuthError } from "@/lib/require-admin";
 import { createServiceClient } from "@/lib/supabase-server";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
   const { id } = await params;
-  const db = createServiceClient();
 
-  // Entity + connected cases + cross-case messages
+  const db = createServiceClient();
   const [entity, caseEntities, messages] = await Promise.all([
     db.from("entities").select("*").eq("id", id).single(),
     db.from("case_entities").select("role, cases(id, case_number, title, status, urgency, importance, last_message_at)")
       .eq("entity_id", id),
-    // Messages mentioning this entity: through case_entities → cases → messages
     db.from("case_entities").select("cases(id, case_number, title, messages(id, raw_payload, sender_identifier, occurred_at))")
       .eq("entity_id", id),
   ]);
 
   if (entity.error) return NextResponse.json({ error: "Entity not found" }, { status: 404 });
 
-  // Flatten messages across all cases
   const allMessages: Array<{ id: string; content: string; sender: string; occurred_at: string; case_number: number; case_title: string }> = [];
   for (const ce of messages.data || []) {
     const c = ce.cases as unknown as Record<string, unknown> | null;
@@ -39,15 +39,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const cases = (caseEntities.data || []).map(ce => ({ ...(ce.cases as unknown as Record<string, unknown>), role: ce.role }));
 
   return NextResponse.json({
-    entity: entity.data,
-    cases,
+    entity: entity.data, cases,
     messages: allMessages.slice(0, 50),
-    case_count: cases.length,
-    message_count: allMessages.length,
+    case_count: cases.length, message_count: allMessages.length,
   });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
   const { id } = await params;
   const body = await req.json();
   const allowed = ["canonical_name", "type", "phone", "email", "whatsapp_number", "telegram_handle", "website", "external_id"];

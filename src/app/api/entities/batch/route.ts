@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, isAuthError } from "@/lib/require-admin";
 import { createServiceClient } from "@/lib/supabase-server";
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
   const { ids, action } = await req.json();
   if (!ids?.length || !action) return NextResponse.json({ error: "ids and action required" }, { status: 400 });
 

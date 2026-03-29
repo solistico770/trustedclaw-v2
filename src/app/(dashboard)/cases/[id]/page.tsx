@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { DEMO_USER_ID } from "@/lib/constants";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -42,7 +42,7 @@ export default function CaseDetail() {
   async function changeStatus(status: string) {
     await fetch(`/api/cases/${id}/status`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: DEMO_USER_ID, status }),
+      body: JSON.stringify({ status }),
     });
     load();
   }
@@ -51,7 +51,7 @@ export default function CaseDetail() {
     setScanning(true);
     await fetch(`/api/agent/scan/${id}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: DEMO_USER_ID }),
+      body: JSON.stringify({}),
     });
     await load(); setScanning(false);
   }

@@ -1,40 +1,26 @@
 ## ADDED Requirements
 
-### Requirement: shadcn dashboard layout
-The dashboard SHALL use a shadcn dashboard template with collapsible sidebar, header, and main content area.
+### Requirement: shadcn Sidebar component
+The dashboard SHALL use the shadcn `sidebar` component with SidebarProvider, collapsible nav, and mobile sheet.
 
-#### Scenario: Dashboard loads with sidebar
-- **WHEN** admin user visits the dashboard
-- **THEN** they see a sidebar with navigation items (Cases, Entities, Scanner, Simulate, Settings) and a main content area
+#### Scenario: Desktop sidebar
+- **WHEN** admin visits dashboard on desktop
+- **THEN** sidebar shows nav items (Cases, Entities, Simulate, Scanner, Settings) with collapse toggle
 
-#### Scenario: Sidebar collapses
-- **WHEN** user collapses the sidebar
-- **THEN** it minimizes to icon-only mode, preserving screen space
+#### Scenario: Mobile sidebar
+- **WHEN** viewport is below 768px
+- **THEN** sidebar is a sheet/drawer triggered by hamburger button
 
-### Requirement: Responsive layout
-The dashboard SHALL be responsive — sidebar becomes a sheet/drawer on mobile.
+### Requirement: User menu in sidebar
+The sidebar footer SHALL show the logged-in user's email, role, and a logout button.
 
-#### Scenario: Mobile viewport
-- **WHEN** the viewport is below 768px
-- **THEN** the sidebar is hidden and accessible via a hamburger menu that opens a sheet
+#### Scenario: User menu displays
+- **WHEN** admin is logged in
+- **THEN** sidebar footer shows their email and a logout button
 
-### Requirement: RTL support
-The dashboard layout SHALL maintain RTL (right-to-left) direction for Hebrew content.
+### Requirement: RTL support preserved
+The dashboard SHALL maintain dir="rtl" with sidebar on the right side.
 
 #### Scenario: RTL rendering
-- **WHEN** the dashboard renders
-- **THEN** the HTML has `dir="rtl"` and the sidebar appears on the right side
-
-### Requirement: User menu
-The dashboard header SHALL include a user avatar/dropdown with logout option.
-
-#### Scenario: User menu interaction
-- **WHEN** user clicks their avatar in the header
-- **THEN** a dropdown appears with their display name/email and a logout button
-
-### Requirement: Dark mode
-The dashboard SHALL support dark mode via shadcn's theme system.
-
-#### Scenario: Dark mode toggle
-- **WHEN** user toggles dark mode
-- **THEN** the entire dashboard switches themes without page reload
+- **WHEN** dashboard renders
+- **THEN** sidebar appears on right, content on left, text flows RTL
