@@ -30,9 +30,10 @@ export type AgentResponse = {
 export async function callAgent(
   contextPrompt: string,
   messages: Array<{ sender: string; content: string; timestamp: string }>,
-  openCases: Array<{ id: string; title: string; summary: string; importance: number; message_count: number }>,
+  openCases: Array<{ id: string; case_number?: number; title: string; summary: string; importance: number; message_count: number; first_message?: string | null; first_sender?: string | null }>,
   skills: Skill[],
   pulledSkillInstructions: string[],
+  existingEntityNames: string[],
   previousSummary?: string
 ): Promise<{ response: AgentResponse; raw: string; tokens: number; durationMs: number; skillsPulled: string[] }> {
   const model = genAI.getGenerativeModel({
@@ -42,8 +43,16 @@ export async function callAgent(
 
   const messagesText = messages.map((m, i) => `[${i + 1}] ${m.timestamp} | ${m.sender}: ${m.content}`).join("\n");
   const casesText = openCases.length > 0
-    ? openCases.map(c => `- Case ${c.id.slice(0, 8)}: "${c.title}" (importance=${c.importance}, ${c.message_count} msgs)`).join("\n")
+    ? openCases.map(c => {
+        const title = c.title || "(untitled)";
+        const firstMsg = c.first_message ? ` — first msg from ${c.first_sender || "?"}: "${c.first_message.slice(0, 100)}"` : "";
+        return `- Case #${c.case_number || "?"} [${c.id}]: "${title}"${firstMsg} (importance=${c.importance}, ${c.message_count} msgs)`;
+      }).join("\n")
     : "No other open cases.";
+
+  const existingEntitiesText = existingEntityNames.length > 0
+    ? `\nALREADY CONNECTED ENTITIES (do NOT re-propose these): ${existingEntityNames.join(", ")}`
+    : "";
 
   // Build skill map — summary for all, full instructions for auto_attach and pulled
   const skillMap = skills.filter(s => s.auto_attach || s.summary).map(s =>
@@ -69,9 +78,10 @@ ${skillMap || "No skills defined."}
 ---
 CASE MESSAGES:
 ${messagesText}
+${existingEntitiesText}
 
 ${previousSummary ? `PREVIOUS ANALYSIS:\n${previousSummary}\n` : ""}
-OTHER OPEN CASES:
+OTHER OPEN CASES (check for MERGE — if same topic/sender, use merge_into with the case ID):
 ${casesText}
 
 ---

@@ -61,16 +61,42 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       .filter(s => prevPulled.includes(s.name))
       .map(s => `SKILL: ${s.name}\n${s.instructions}`);
 
-    // 6. Get open cases for merge
-    const { data: openCases } = await db.from("cases")
-      .select("id, title, summary, importance, message_count")
+    // 6. Get open cases for merge — include first message for context
+    const { data: openCasesRaw } = await db.from("cases")
+      .select("id, case_number, title, summary, importance, message_count")
       .eq("user_id", userId).not("id", "eq", caseId)
       .in("status", ["open", "action_needed", "in_progress", "escalated"])
       .order("importance", { ascending: false }).limit(10);
 
+    // Fetch first message for each open case
+    const openCases = [];
+    for (const oc of openCasesRaw || []) {
+      const { data: firstMsg } = await db.from("messages")
+        .select("raw_payload, sender_identifier")
+        .eq("case_id", oc.id)
+        .order("occurred_at", { ascending: true })
+        .limit(1).single();
+      openCases.push({
+        ...oc,
+        first_message: firstMsg?.raw_payload?.content || null,
+        first_sender: firstMsg?.sender_identifier || null,
+      });
+    }
+
+    // 6.5 Get existing entities for this case — so agent doesn't re-propose
+    const { data: existingCaseEntities } = await db.from("case_entities")
+      .select("entities(canonical_name, type)")
+      .eq("case_id", caseId);
+    const existingEntityNames = (existingCaseEntities || [])
+      .map((ce: Record<string, unknown>) => {
+        const ent = ce.entities as Record<string, string> | null;
+        return ent?.canonical_name;
+      })
+      .filter(Boolean) as string[];
+
     // 7. Call agent
     const { response, raw, tokens, durationMs, skillsPulled } = await callAgent(
-      contextPrompt, msgList, openCases || [], skills, pulledInstructions, previousSummary
+      contextPrompt, msgList, openCases, skills, pulledInstructions, existingEntityNames, previousSummary
     );
 
     // 8. If skills were pulled, do a second call with full instructions
@@ -206,16 +232,23 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
           results.push({ type: "set_next_scan", status: "ok", detail: cmd.value });
           break;
         case "propose_entity": {
-          // Check ALL entities by name — avoid any duplicates
+          const normalized = cmd.name.trim();
+          if (!normalized || normalized.length < 2) {
+            results.push({ type: "propose_entity", status: "skipped", detail: "name too short" });
+            break;
+          }
+          // Check ALL entities by name — ilike + contains for partial matches
           const { data: existing } = await db.from("entities")
-            .select("id").eq("user_id", userId).ilike("canonical_name", cmd.name).limit(1);
+            .select("id").eq("user_id", userId)
+            .or(`canonical_name.ilike.${normalized},canonical_name.ilike.%${normalized}%`)
+            .limit(1);
           if (existing && existing.length > 0) {
             await db.from("case_entities").upsert({ case_id: caseId, entity_id: existing[0].id, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
-            results.push({ type: "propose_entity", status: "linked_existing", detail: cmd.name });
+            results.push({ type: "propose_entity", status: "linked_existing", detail: normalized });
           } else {
-            const { data: ne } = await db.from("entities").insert({ user_id: userId, type: cmd.entity_type || "other", canonical_name: cmd.name, status: "active" }).select("id").single();
+            const { data: ne } = await db.from("entities").insert({ user_id: userId, type: cmd.entity_type || "other", canonical_name: normalized, status: "active" }).select("id").single();
             if (ne) await db.from("case_entities").upsert({ case_id: caseId, entity_id: ne.id, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
-            results.push({ type: "propose_entity", status: "created", detail: cmd.name });
+            results.push({ type: "propose_entity", status: "created", detail: normalized });
           }
           break;
         }
@@ -241,7 +274,18 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
   }
 
   if (Object.keys(updates).length > 0) {
-    await db.from("cases").update(updates).eq("id", caseId);
+    const { error: updateError } = await db.from("cases").update(updates).eq("id", caseId);
+    if (updateError) {
+      console.error("[scanner] DB update failed:", updateError.message, "updates:", JSON.stringify(updates));
+      results.push({ type: "db_update", status: "error", detail: updateError.message });
+    } else {
+      // Verify the write actually stuck
+      const { data: verify } = await db.from("cases").select("title, summary, urgency, importance").eq("id", caseId).single();
+      if (verify && updates.title && verify.title !== updates.title) {
+        console.error("[scanner] DB write mismatch! Expected title:", updates.title, "Got:", verify.title);
+        results.push({ type: "db_verify", status: "mismatch", detail: `title: expected '${String(updates.title).slice(0,30)}' got '${verify.title?.slice(0,30)}'` });
+      }
+    }
   }
 
   return results;
