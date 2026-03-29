@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-const publicPaths = ["/login", "/auth/callback", "/waiting"];
+const publicPaths = ["/login", "/auth/callback", "/waiting", "/reset-password"];
 const apiPublicPaths = ["/api/messages/ingest", "/api/agent/scan"];
 
 export async function proxy(req: NextRequest) {
