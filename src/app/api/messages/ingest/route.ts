@@ -71,6 +71,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Failed to save message" }, { status: 503 });
     }
 
+    // If message came through admin gate, auto-link admin entity as sender
+    if (gateId) {
+      const { data: gate } = await db.from("gates").select("metadata").eq("id", gateId).single();
+      if (gate?.metadata?.is_admin_gate) {
+        const { data: settings } = await db.from("user_settings").select("admin_entity_id").eq("user_id", user_id).single();
+        if (settings?.admin_entity_id) {
+          await db.from("case_entities").upsert(
+            { case_id: newCase.id, entity_id: settings.admin_entity_id, role: "primary" },
+            { onConflict: "case_id,entity_id" }
+          );
+        }
+      }
+    }
+
     await logAudit(db, {
       user_id, actor: "system", action_type: "message_ingested",
       target_type: "message", target_id: msg.id,

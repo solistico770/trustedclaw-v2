@@ -37,9 +37,17 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       timestamp: m.occurred_at,
     }));
 
-    // 3. Get context prompt
-    const { data: settings } = await db.from("user_settings").select("context_prompt").eq("user_id", userId).single();
-    const contextPrompt = settings?.context_prompt || "You are an operational agent.";
+    // 3. Get context prompt + admin identity
+    const { data: settings } = await db.from("user_settings").select("context_prompt, admin_entity_id").eq("user_id", userId).single();
+    let contextPrompt = settings?.context_prompt || "You are an operational agent.";
+
+    // Inject admin identity
+    if (settings?.admin_entity_id) {
+      const { data: admin } = await db.from("entities").select("canonical_name, type").eq("id", settings.admin_entity_id).single();
+      if (admin) {
+        contextPrompt = `ADMIN IDENTITY: You work for "${admin.canonical_name}". This is the owner of the system. All cases are managed on behalf of ${admin.canonical_name}.\n\n${contextPrompt}`;
+      }
+    }
 
     // 4. Get skills
     const { data: allSkills } = await db.from("skills")

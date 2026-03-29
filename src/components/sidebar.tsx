@@ -16,13 +16,13 @@ function Icon({ d }: { d: string }) {
   return <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d={d} /></svg>;
 }
 
-export function Sidebar({ caseCount }: { caseCount?: number }) {
+export function Sidebar({ caseCount, adminName }: { caseCount?: number; adminName?: string }) {
   const pathname = usePathname();
   return (
     <aside className="w-56 bg-sidebar border-l border-sidebar-border flex flex-col h-screen sticky top-0">
       <div className="px-5 py-5 border-b border-sidebar-border">
         <h1 className="text-base font-semibold text-white tracking-tight">TrustedClaw</h1>
-        <p className="text-[11px] text-muted-foreground mt-0.5">Operational Agent</p>
+        <p className="text-[11px] text-muted-foreground mt-0.5">{adminName ? `Agent for ${adminName}` : "Operational Agent"}</p>
       </div>
       <nav className="flex-1 py-3 px-3 space-y-0.5">
         {nav.map((item) => {
