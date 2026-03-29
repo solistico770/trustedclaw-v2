@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { DEMO_USER_ID } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import Link from "next/link";
 
 export default function SettingsPage() {
   const [prompt, setPrompt] = useState("");
@@ -20,22 +21,40 @@ export default function SettingsPage() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: DEMO_USER_ID, context_prompt: prompt }),
     });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setSaved(true); setTimeout(() => setSaved(false), 2000);
   }
 
   return (
-    <div className="space-y-4 max-w-2xl">
-      <h2 className="text-xl font-bold">Settings</h2>
-      <Card className="bg-zinc-900 border-zinc-800">
-        <CardHeader><CardTitle className="text-sm">Context Prompt</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-xs text-zinc-500">הטקסט הזה מוזרק לתחילת כל שיחה עם ה-agent. כתוב בו מי אתה, מה חשוב לך, ומה להתעלם ממנו.</p>
-          {loading ? <div className="h-32 bg-zinc-800 rounded animate-pulse" /> :
-            <Textarea value={prompt} onChange={e => setPrompt(e.target.value)} className="bg-zinc-800 border-zinc-700 min-h-[200px] font-mono text-xs" />}
-          <div className="flex gap-2 items-center">
-            <Button onClick={save}>Save</Button>
-            {saved && <span className="text-green-400 text-xs">Saved!</span>}
+    <div className="space-y-6 max-w-2xl">
+      <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+
+      {/* Navigation */}
+      <div className="flex gap-3">
+        <Link href="/settings" className="text-sm font-medium text-primary border-b-2 border-primary pb-1">Context Prompt</Link>
+        <Link href="/settings/channels" className="text-sm text-muted-foreground hover:text-foreground pb-1">Channels</Link>
+      </div>
+
+      {/* Context Prompt */}
+      <Card className="border-border/50">
+        <CardContent className="p-5 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold mb-1">Agent Context Prompt</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              This text is injected at the start of every AI agent scan. Tell the agent who you are, what matters, and what to ignore.
+            </p>
+          </div>
+
+          {loading ? (
+            <div className="h-48 bg-card rounded-lg animate-pulse" />
+          ) : (
+            <Textarea value={prompt} onChange={e => setPrompt(e.target.value)}
+              className="min-h-[240px] font-mono text-[13px] leading-relaxed"
+              placeholder="You are an operational agent working for... High priority: ... Low priority: ..." />
+          )}
+
+          <div className="flex gap-3 items-center">
+            <Button onClick={save} className="bg-primary">Save Prompt</Button>
+            {saved && <span className="text-sm text-emerald-400">Saved!</span>}
           </div>
         </CardContent>
       </Card>
