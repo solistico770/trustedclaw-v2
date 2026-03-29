@@ -109,6 +109,11 @@ For standalone: always include set_status, set_urgency, set_importance, set_titl
 For merge: only merge_into.
 Only propose entities that are REAL things (people, companies, projects). Don't re-propose already connected ones.
 
+CRITICAL: You MUST follow skills. Every action you take must be guided by a skill.
+- Auto-attached skills are already in your context — follow them.
+- If you need a non-attached skill, pull it first with pull_skill.
+- If no skill covers what you need, explain in reasoning.
+
 Return ONLY valid JSON.`;
 
   const startTime = Date.now();

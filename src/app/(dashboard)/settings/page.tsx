@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 type Gate = { id: string; type: string; display_name: string; status: string; created_at: string };
-type Channel = { id: string; name: string; description: string | null; gate_id: string | null; external_id: string | null; gates?: { type: string; display_name: string } };
+// Channel type removed — deprecated
 type Entity = { id: string; type: string; canonical_name: string; status: string; phone?: string; email?: string; whatsapp_number?: string; telegram_handle?: string; website?: string; external_id?: string; created_at: string };
 
 type Skill = { id: string; name: string; summary: string; instructions: string; auto_attach: boolean; is_active: boolean; created_at: string };
@@ -260,92 +260,6 @@ function GatesTab() {
                 </div>
                 <p className="text-[10px] text-muted-foreground font-mono mt-0.5">{g.id.slice(0, 8)}</p>
               </div>
-            </CardContent>
-          </Card>
-        ))}
-    </div>
-  );
-}
-
-// ─── CHANNELS TAB ───
-function ChannelsTab() {
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [gates, setGates] = useState<Gate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [gateId, setGateId] = useState("");
-
-  const load = useCallback(async () => {
-    const [chRes, gRes] = await Promise.all([
-      fetch(`/api/channels?user_id=${DEMO_USER_ID}`).then(r => r.json()),
-      import("@/lib/supabase-browser").then(m => m.createBrowserClient().from("gates").select("*").eq("user_id", DEMO_USER_ID)),
-    ]);
-    if (Array.isArray(chRes)) setChannels(chRes);
-    if (gRes.data) setGates(gRes.data);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  async function create() {
-    if (!name.trim()) return;
-    await fetch("/api/channels", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: DEMO_USER_ID, name, description: desc || null, gate_id: gateId || null }),
-    });
-    setName(""); setDesc(""); setGateId(""); setShowForm(false); load();
-  }
-
-  async function remove(id: string) {
-    await fetch(`/api/channels/${id}`, { method: "DELETE" }); load();
-  }
-
-  return (
-    <div className="space-y-4 max-w-2xl">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">Communication channels. AI assigns cases to channels.</p>
-        <Button size="sm" onClick={() => setShowForm(!showForm)}>{showForm ? "Cancel" : "Add Channel"}</Button>
-      </div>
-      {showForm && (
-        <Card className="border-primary/30">
-          <CardContent className="p-4 space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Name *</label>
-                <Input value={name} onChange={e => setName(e.target.value)} placeholder="Project Alpha" className="h-9 text-sm" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Gate</label>
-                <select className="w-full h-9 bg-input border border-border rounded-lg px-3 text-sm" value={gateId} onChange={e => setGateId(e.target.value)}>
-                  <option value="">None</option>
-                  {gates.map(g => <option key={g.id} value={g.id}>{g.display_name} ({g.type})</option>)}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Description</label>
-              <Input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Optional" className="h-9 text-sm" />
-            </div>
-            <Button onClick={create} disabled={!name.trim()} className="bg-primary">Create</Button>
-          </CardContent>
-        </Card>
-      )}
-      {loading ? <div className="h-16 bg-card rounded-xl animate-pulse" /> :
-        channels.length === 0 ? <p className="text-muted-foreground text-sm text-center py-8">No channels yet</p> :
-        channels.map(ch => (
-          <Card key={ch.id} className="border-border/50">
-            <CardContent className="p-4 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-primary/10 dark:bg-primary/15 flex items-center justify-center text-primary text-sm font-bold">{ch.name[0]}</div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">{ch.name}</span>
-                  {ch.gates && <Badge variant="secondary" className="text-[10px]">{ch.gates.type}</Badge>}
-                </div>
-                {ch.description && <p className="text-[11px] text-muted-foreground mt-0.5">{ch.description}</p>}
-              </div>
-              <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive" onClick={() => remove(ch.id)}>Remove</Button>
             </CardContent>
           </Card>
         ))}
