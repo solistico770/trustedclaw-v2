@@ -8,6 +8,7 @@ export type AgentCommand =
   | { type: "set_importance"; value: number }
   | { type: "set_title"; value: string }
   | { type: "set_summary"; value: string }
+  | { type: "set_next_scan"; value: string }
   | { type: "propose_entity"; name: string; entity_type: string; role: string }
   | { type: "merge_into"; target_case_id: string; reason: string }
   | { type: "pull_skill"; skill_name: string };
@@ -84,6 +85,7 @@ Return JSON with:
    - {"type": "set_urgency", "value": 1-5} — 1=CRITICAL (needs attention NOW), 2=HIGH, 3=MEDIUM, 4=LOW, 5=MINIMAL
    - {"type": "set_importance", "value": 1-5} — 1=CRITICAL (highest impact), 2=HIGH, 3=MEDIUM, 4=LOW, 5=MINIMAL
    - {"type": "set_title", "value": "short title"}
+   - {"type": "set_next_scan", "value": "ISO8601 datetime"} — OPTIONAL override of default scan schedule
    - {"type": "set_summary", "value": "1-2 sentences"}
    - {"type": "propose_entity", "name": "name", "entity_type": "person|company|project|invoice|other", "role": "primary|related|mentioned"}
    - {"type": "merge_into", "target_case_id": "UUID", "reason": "why"}
@@ -92,10 +94,18 @@ Return JSON with:
 3. "reasoning": brief explanation
 
 IMPORTANT SCALE: 1 = most critical/urgent, 5 = least. Lower number = higher priority.
-The system uses urgency×importance to determine scan frequency. urgency=1 + importance=1 = scan every 20 seconds.
+The system has a default scan schedule based on urgency×importance (e.g. 1×1=20s, 3×3=5m, 5×5=24h).
 
-For standalone: always include set_status, set_urgency, set_importance, set_title, set_summary.
-Do NOT include set_next_scan — the system calculates it automatically from urgency×importance.
+HOWEVER: you can OVERRIDE the default schedule with set_next_scan when it makes sense.
+Examples of when to override:
+- Case is "addressed" but important → defer to tomorrow
+- Waiting for a meeting on Tuesday → set scan to Monday night
+- Nothing will change for a week → defer 7 days
+- Something urgent but you already classified it → no need to re-scan in 20s, set to 1 hour
+
+If you don't include set_next_scan, the system uses the default matrix.
+
+For standalone: always include set_status, set_urgency, set_importance, set_title, set_summary. Optionally set_next_scan.
 For merge: only merge_into.
 Only propose entities that are REAL things (people, companies, projects). Don't re-propose already connected ones.
 

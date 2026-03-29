@@ -100,17 +100,22 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     const executionResults = await executeCommands(db, caseId, userId, finalResponse.commands);
     commandsExecuted.push(...executionResults);
 
-    // 10. Update last_scanned_at + set next_scan from urgency×importance matrix
-    const { data: updatedCase } = await db.from("cases").select("urgency, importance").eq("id", caseId).single();
-    const urg = updatedCase?.urgency || 3;
-    const imp = updatedCase?.importance || 3;
-    const intervalSec = getScanIntervalSeconds(urg, imp);
-    const nextScanAt = new Date(Date.now() + intervalSec * 1000).toISOString();
+    // 10. Update last_scanned_at. Use agent's next_scan_at if set, otherwise matrix default.
+    const { data: updatedCase } = await db.from("cases").select("urgency, importance, next_scan_at").eq("id", caseId).single();
+    const agentSetNextScan = finalResponse.commands.some(c => c.type === "set_next_scan");
 
-    await db.from("cases").update({
-      last_scanned_at: new Date().toISOString(),
-      next_scan_at: nextScanAt,
-    }).eq("id", caseId);
+    const updateData: Record<string, unknown> = { last_scanned_at: new Date().toISOString() };
+
+    if (!agentSetNextScan) {
+      // Agent didn't override — use matrix
+      const urg = updatedCase?.urgency || 3;
+      const imp = updatedCase?.importance || 3;
+      const intervalSec = getScanIntervalSeconds(urg, imp);
+      updateData.next_scan_at = new Date(Date.now() + intervalSec * 1000).toISOString();
+    }
+    // else: agent already set next_scan_at via command executor
+
+    await db.from("cases").update(updateData).eq("id", caseId);
 
     // 11. Save CaseEvent with full detail
     const eventType = caseData.status === "pending" ? "initial_scan" :
@@ -196,7 +201,10 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
           updates.summary = cmd.value;
           results.push({ type: "set_summary", status: "ok" });
           break;
-        // set_next_scan removed — system calculates from urgency×importance matrix
+        case "set_next_scan":
+          updates.next_scan_at = cmd.value;
+          results.push({ type: "set_next_scan", status: "ok", detail: cmd.value });
+          break;
         case "propose_entity": {
           const { data: existing } = await db.from("entities")
             .select("id").eq("user_id", userId).ilike("canonical_name", cmd.name).in("status", ["active", "proposed"]).limit(1);
