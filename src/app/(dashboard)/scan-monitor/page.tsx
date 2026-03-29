@@ -20,10 +20,16 @@ export default function ScanMonitorPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function runScan() {
+  async function runScan(scanAll: boolean = false) {
     setRunning(true);
     await fetch("/api/agent/scan", {
-      method: "POST", headers: { "Content-Type": "application/json", "x-cron-secret": "tcv2-scan-secret-2026", "x-triggered-by": "manual" },
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-cron-secret": "tcv2-scan-secret-2026",
+        "x-triggered-by": "manual",
+        ...(scanAll ? { "x-scan-all": "true" } : {}),
+      },
     });
     await load(); setRunning(false);
   }
@@ -37,9 +43,14 @@ export default function ScanMonitorPage() {
           <h1 className="text-2xl font-bold tracking-tight">Agent Scanner</h1>
           <p className="text-sm text-muted-foreground mt-1">The AI agent scans pending cases every 5 minutes</p>
         </div>
-        <Button onClick={runScan} disabled={running} className="bg-primary">
-          {running ? "Scanning..." : "Run Scan Now"}
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => runScan(false)} disabled={running} className="bg-primary">
+            {running ? "Scanning..." : "Scan Due"}
+          </Button>
+          <Button onClick={() => runScan(true)} disabled={running} variant="secondary">
+            {running ? "Scanning..." : "Scan All Open"}
+          </Button>
+        </div>
       </div>
 
       {/* Status */}

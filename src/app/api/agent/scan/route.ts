@@ -5,6 +5,7 @@ import { scanCase } from "@/lib/agent-scanner";
 export async function POST(req: NextRequest) {
   const startTime = Date.now();
   const triggeredBy = req.headers.get("x-triggered-by") || "vercel_cron";
+  const scanAll = req.headers.get("x-scan-all") === "true";
 
   // Validate cron secret (skip for manual)
   if (triggeredBy !== "manual") {
@@ -16,16 +17,30 @@ export async function POST(req: NextRequest) {
 
   const db = createServiceClient();
 
-  // Find cases to scan: pending OR next_scan_at <= now
-  const { data: casesToScan } = await db.from("cases")
-    .select("id, user_id, status, importance")
-    .or("status.eq.pending,and(next_scan_at.lte.now(),status.not.in.(closed,merged))")
-    .order("importance", { ascending: false })
-    .limit(5);
+  let casesToScan;
+
+  if (scanAll) {
+    // Scan ALL open cases — only via manual "Scan All" button
+    const { data } = await db.from("cases")
+      .select("id, user_id, status, importance")
+      .not("status", "in", '("closed","merged")')
+      .order("importance", { ascending: false })
+      .limit(20);
+    casesToScan = data;
+  } else {
+    // Normal scheduled scan: ONLY cases where next_scan_at has arrived
+    const { data } = await db.from("cases")
+      .select("id, user_id, status, importance")
+      .not("status", "in", '("closed","merged")')
+      .lte("next_scan_at", new Date().toISOString())
+      .order("importance", { ascending: false })
+      .limit(5);
+    casesToScan = data;
+  }
 
   let casesScanned = 0;
   let casesMerged = 0;
-  let errors: string[] = [];
+  const errors: string[] = [];
 
   for (const c of casesToScan || []) {
     try {
@@ -40,7 +55,6 @@ export async function POST(req: NextRequest) {
 
   const durationMs = Date.now() - startTime;
 
-  // Get any user_id for the scan log
   const userId = casesToScan?.[0]?.user_id;
   if (userId) {
     await db.from("scan_logs").insert({
@@ -59,5 +73,6 @@ export async function POST(req: NextRequest) {
     cases_merged: casesMerged,
     duration_ms: durationMs,
     errors: errors.length,
+    mode: scanAll ? "all_open" : "due_only",
   });
 }

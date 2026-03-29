@@ -137,17 +137,30 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
         // Move messages from this case to target
         await db.from("messages").update({ case_id: cmd.target_case_id }).eq("case_id", caseId);
 
+        // Also move case_entities to target
+        const { data: srcEntities } = await db.from("case_entities").select("entity_id, role").eq("case_id", caseId);
+        for (const ce of srcEntities || []) {
+          await db.from("case_entities").upsert(
+            { case_id: cmd.target_case_id, entity_id: ce.entity_id, role: ce.role },
+            { onConflict: "case_id,entity_id" }
+          );
+        }
+
         // Update target case message count
         const { count } = await db.from("messages").select("*", { count: "exact", head: true }).eq("case_id", cmd.target_case_id);
         await db.from("cases").update({
           message_count: count || 0,
           last_message_at: new Date().toISOString(),
+          next_scan_at: new Date().toISOString(), // trigger re-scan on target
         }).eq("id", cmd.target_case_id);
 
-        // Mark this case as merged
-        updates.status = "merged";
-        updates.merged_into_case_id = cmd.target_case_id;
-        updates.next_scan_at = null;
+        // Mark this case as merged IMMEDIATELY (don't rely on updates object)
+        await db.from("cases").update({
+          status: "merged",
+          merged_into_case_id: cmd.target_case_id,
+          next_scan_at: null,
+          closed_at: new Date().toISOString(),
+        }).eq("id", caseId);
 
         await logAudit(db, {
           user_id: userId, actor: "agent", action_type: "case_merged",
@@ -155,7 +168,9 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
           reasoning: cmd.reason,
           metadata: { merged_into: cmd.target_case_id },
         });
-        break;
+
+        // Return early — no further updates to this case
+        return;
       }
     }
   }
