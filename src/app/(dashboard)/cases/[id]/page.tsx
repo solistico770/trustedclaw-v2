@@ -171,25 +171,82 @@ export default function CaseDetail() {
 
       {/* Agent History */}
       {tab === "agent" && (
-        <div className="space-y-3">
-          {(data.case_events || []).map((ev: { id: string; event_type: string; api_commands: Array<{ type: string; value?: unknown; name?: string }>; out_raw: { reasoning?: string }; tokens_used: number; duration_ms: number; created_at: string }) => (
+        <div className="space-y-4">
+          {(data.case_events || []).map((ev: {
+            id: string; event_type: string; status?: string;
+            in_context: Record<string, unknown>;
+            out_raw: { reasoning?: string; decision?: string; commands?: Array<{ type: string; value?: unknown; name?: string }> };
+            api_commands: Array<{ type: string; value?: unknown; name?: string }>;
+            commands_executed?: Array<{ type: string; status: string; detail?: string }>;
+            skills_pulled?: string[];
+            tokens_used: number; duration_ms: number; error_message?: string; created_at: string;
+          }) => (
             <Card key={ev.id} className="border-border/50">
-              <CardHeader className="p-4 pb-2">
-                <div className="flex items-center gap-2">
+              <CardContent className="p-4 space-y-3">
+                {/* Header */}
+                <div className="flex items-center gap-2 flex-wrap">
                   <Badge variant="secondary" className="text-[11px]">{ev.event_type}</Badge>
+                  <Badge className={`text-[10px] ${ev.status === "failed" ? "bg-red-100 text-red-800 dark:bg-red-500/15 dark:text-red-400" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-400"}`}>{ev.status || "success"}</Badge>
                   <span className="text-[11px] text-muted-foreground">{new Date(ev.created_at).toLocaleString("he-IL")}</span>
-                  <span className="text-[11px] text-muted-foreground mr-auto">{ev.tokens_used} tokens / {ev.duration_ms}ms</span>
+                  <span className="text-[11px] text-muted-foreground mr-auto">{ev.tokens_used} tokens · {ev.duration_ms}ms</span>
                 </div>
-              </CardHeader>
-              <CardContent className="p-4 pt-0">
-                {ev.out_raw?.reasoning && <p className="text-sm text-foreground/80 mb-2">{ev.out_raw.reasoning}</p>}
-                <div className="flex gap-1.5 flex-wrap">
-                  {(ev.api_commands || []).map((cmd: { type: string; value?: unknown; name?: string }, i: number) => (
-                    <span key={i} className="text-[11px] px-2 py-0.5 rounded-md bg-secondary text-secondary-foreground font-mono">
-                      {cmd.type}{cmd.value !== undefined ? `=${String(cmd.value).slice(0, 25)}` : cmd.name ? `=${cmd.name}` : ""}
-                    </span>
-                  ))}
-                </div>
+
+                {/* AI Response */}
+                {ev.out_raw?.reasoning && (
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">AI Response</p>
+                    <p className="text-sm text-foreground/90">{ev.out_raw.reasoning}</p>
+                    {ev.out_raw.decision && <p className="text-xs text-muted-foreground mt-1">Decision: <strong>{ev.out_raw.decision}</strong></p>}
+                  </div>
+                )}
+
+                {/* Commands Requested by LLM */}
+                {ev.api_commands?.length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">LLM Commands</p>
+                    <div className="flex gap-1.5 flex-wrap">
+                      {ev.api_commands.map((cmd: { type: string; value?: unknown; name?: string }, i: number) => (
+                        <span key={i} className="text-[11px] px-2 py-1 rounded-md bg-secondary text-secondary-foreground font-mono">
+                          {cmd.type}{cmd.value !== undefined ? `=${String(cmd.value).slice(0, 30)}` : cmd.name ? `=${cmd.name}` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Commands Executed (results) */}
+                {ev.commands_executed && ev.commands_executed.length > 0 && (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">Execution Results</p>
+                    {ev.commands_executed.map((cmd: { type: string; status: string; detail?: string }, j: number) => (
+                      <div key={j} className="flex items-center gap-2 text-xs py-0.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${cmd.status === "ok" || cmd.status === "linked_existing" || cmd.status === "created" ? "bg-emerald-500" : "bg-red-500"}`} />
+                        <span className="font-mono text-foreground/70">{cmd.type}</span>
+                        <span className="text-muted-foreground">{cmd.status}</span>
+                        {cmd.detail && <span className="text-muted-foreground/70 truncate">{cmd.detail}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Skills */}
+                {ev.skills_pulled && ev.skills_pulled.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Skills pulled:</span>
+                    {ev.skills_pulled.map((s: string, j: number) => <Badge key={j} className="bg-primary/15 text-primary text-[10px]">{s}</Badge>)}
+                  </div>
+                )}
+
+                {/* Error */}
+                {ev.error_message && <p className="text-xs text-red-500 font-mono bg-red-50 dark:bg-red-500/10 p-2 rounded">{ev.error_message}</p>}
+
+                {/* Context (collapsible) */}
+                <details>
+                  <summary className="text-[11px] text-primary cursor-pointer hover:underline">Show full context sent to LLM</summary>
+                  <pre className="mt-1 text-[10px] text-muted-foreground whitespace-pre-wrap bg-muted p-3 rounded-lg max-h-60 overflow-auto font-mono">
+                    {JSON.stringify(ev.in_context, null, 2)}
+                  </pre>
+                </details>
               </CardContent>
             </Card>
           ))}

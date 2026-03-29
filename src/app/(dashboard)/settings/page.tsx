@@ -11,8 +11,11 @@ type Gate = { id: string; type: string; display_name: string; status: string; cr
 type Channel = { id: string; name: string; description: string | null; gate_id: string | null; external_id: string | null; gates?: { type: string; display_name: string } };
 type Entity = { id: string; type: string; canonical_name: string; status: string; phone?: string; email?: string; whatsapp_number?: string; telegram_handle?: string; website?: string; external_id?: string; created_at: string };
 
+type Skill = { id: string; name: string; summary: string; instructions: string; auto_attach: boolean; is_active: boolean; created_at: string };
+
 const TABS = [
   { key: "prompt", label: "Context Prompt" },
+  { key: "skills", label: "Skills" },
   { key: "gates", label: "Gates" },
   { key: "channels", label: "Channels" },
   { key: "entities", label: "Entities" },
@@ -33,6 +36,7 @@ export default function SettingsPage() {
         ))}
       </div>
       {tab === "prompt" && <PromptTab />}
+      {tab === "skills" && <SkillsTab />}
       {tab === "gates" && <GatesTab />}
       {tab === "channels" && <ChannelsTab />}
       {tab === "entities" && <EntitiesTab />}
@@ -74,6 +78,126 @@ function PromptTab() {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ─── SKILLS TAB ───
+function SkillsTab() {
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [summary, setSummary] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [autoAttach, setAutoAttach] = useState(false);
+
+  const load = useCallback(async () => {
+    const data = await (await fetch(`/api/skills?user_id=${DEMO_USER_ID}`)).json();
+    if (Array.isArray(data)) setSkills(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function save() {
+    if (!name.trim() || !summary.trim() || !instructions.trim()) return;
+    if (editingId) {
+      await fetch(`/api/skills/${editingId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, summary, instructions, auto_attach: autoAttach }) });
+    } else {
+      await fetch("/api/skills", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: DEMO_USER_ID, name, summary, instructions, auto_attach: autoAttach }) });
+    }
+    resetForm(); load();
+  }
+
+  async function remove(id: string) {
+    await fetch(`/api/skills/${id}`, { method: "DELETE" }); load();
+  }
+
+  async function toggleActive(id: string, current: boolean) {
+    await fetch(`/api/skills/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: !current }) }); load();
+  }
+
+  function startEdit(s: Skill) {
+    setEditingId(s.id); setName(s.name); setSummary(s.summary); setInstructions(s.instructions); setAutoAttach(s.auto_attach); setShowForm(true);
+  }
+
+  function resetForm() {
+    setEditingId(null); setName(""); setSummary(""); setInstructions(""); setAutoAttach(false); setShowForm(false);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm text-muted-foreground">Skills are context modules the AI can pull on demand.</p>
+          <p className="text-xs text-muted-foreground mt-1"><strong>Summary</strong> = always visible to AI (skill map). <strong>Instructions</strong> = hidden until AI pulls it.</p>
+        </div>
+        <Button size="sm" onClick={() => { resetForm(); setShowForm(!showForm); }}>{showForm ? "Cancel" : "Add Skill"}</Button>
+      </div>
+
+      {showForm && (
+        <Card className="border-primary/30">
+          <CardContent className="p-5 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Skill Name *</label>
+                <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Customer Service Call" className="h-9 text-sm" />
+              </div>
+              <div className="flex items-end gap-3">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={autoAttach} onChange={e => setAutoAttach(e.target.checked)} className="w-4 h-4 rounded accent-primary" />
+                  <span>Auto-attach</span>
+                </label>
+                <p className="text-[10px] text-muted-foreground">Always include full instructions in context</p>
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Summary * <span className="text-muted-foreground/60">(visible to AI always — what this skill does)</span></label>
+              <Textarea value={summary} onChange={e => setSummary(e.target.value)} placeholder="Handles customer service calls. Use when conversation is about a service request or complaint." className="text-sm min-h-[60px]" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Instructions * <span className="text-muted-foreground/60">(hidden until AI pulls — how to do it)</span></label>
+              <Textarea value={instructions} onChange={e => setInstructions(e.target.value)} placeholder="Step-by-step instructions for handling this type of case..." className="text-sm min-h-[120px] font-mono" />
+            </div>
+            <Button onClick={save} disabled={!name.trim() || !summary.trim() || !instructions.trim()} className="bg-primary">
+              {editingId ? "Update Skill" : "Create Skill"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {loading ? <div className="h-16 bg-card rounded-xl animate-pulse" /> :
+        skills.length === 0 ? <p className="text-muted-foreground text-sm text-center py-8">No skills yet. Create your first skill to give the AI specialized knowledge.</p> :
+        skills.map(s => (
+          <Card key={s.id} className={`border-border/50 ${!s.is_active ? "opacity-50" : ""}`}>
+            <CardContent className="p-4">
+              <div className="flex items-start gap-3">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-bold shrink-0 ${s.auto_attach ? "bg-primary/15 text-primary" : "bg-secondary text-secondary-foreground"}`}>
+                  {s.auto_attach ? "A" : "P"}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-semibold text-sm">{s.name}</span>
+                    {s.auto_attach && <Badge className="bg-primary/15 text-primary text-[10px]">auto-attach</Badge>}
+                    {!s.is_active && <Badge variant="outline" className="text-[10px] text-muted-foreground">disabled</Badge>}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{s.summary}</p>
+                  <details className="mt-2">
+                    <summary className="text-[11px] text-primary cursor-pointer hover:underline">Show instructions</summary>
+                    <pre className="mt-1 text-[11px] text-muted-foreground whitespace-pre-wrap bg-muted p-2 rounded-lg">{s.instructions}</pre>
+                  </details>
+                </div>
+                <div className="flex gap-1.5">
+                  <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => startEdit(s)}>Edit</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => toggleActive(s.id, s.is_active)}>{s.is_active ? "Disable" : "Enable"}</Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive" onClick={() => remove(s.id)}>Delete</Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+    </div>
   );
 }
 
