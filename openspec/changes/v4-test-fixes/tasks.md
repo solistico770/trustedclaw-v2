@@ -37,10 +37,10 @@
 
 ## 6. Test & Deploy
 
-- [ ] 6.1 Reset test data (delete all cases, entities, events)
-- [ ] 6.2 Build + deploy
-- [ ] 6.3 Test: send message → scan → verify title+summary are SET
-- [ ] 6.4 Test: send follow-up message → scan → verify MERGE happens
-- [ ] 6.5 Test: send "paid, all good" → scan → verify DE-ESCALATION (urgency/importance lowered)
-- [ ] 6.6 Test: verify no duplicate entities
-- [ ] 6.7 Test: verify no generic entities like "dashboard"
+- [x] 6.1 Reset test data (delete all cases, entities, events)
+- [x] 6.2 Build + deploy
+- [x] 6.3 Test: send message → scan → verify title+summary are SET ✓ "Overdue Invoice #4521 (15,000 ILS) from David Cohen"
+- [x] 6.4 Test: send follow-up message → scan → verify MERGE happens ✓ merged into case #1
+- [x] 6.5 Test: send "paid, all good" → scan → verify DE-ESCALATION ✓ U=1→3, I=1→2, merged + de-escalated
+- [x] 6.6 Test: verify no duplicate entities ✓ only 2 entities, zero dupes
+- [x] 6.7 Test: verify no generic entities like "dashboard" ✓ only "דוד כהן" and "Invoice #4521"
