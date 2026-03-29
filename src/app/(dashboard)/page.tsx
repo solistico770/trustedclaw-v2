@@ -164,8 +164,13 @@ export default function CasesBoard() {
                       <span className={`text-[11px] font-medium ${URG_STYLE[c.urgency]}`}>{c.urgency}</span>
                       <span className="text-[11px] text-muted-foreground">{c.message_count} msgs</span>
                       {c.last_message_at && (
-                        <span className="text-[11px] text-muted-foreground mr-auto">
+                        <span className="text-[11px] text-muted-foreground">
                           {new Date(c.last_message_at).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      )}
+                      {c.next_scan_at && c.status !== "closed" && (
+                        <span className="text-[11px] text-cyan-400/70 mr-auto">
+                          scan: {new Date(c.next_scan_at).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                         </span>
                       )}
                     </div>

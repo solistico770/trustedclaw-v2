@@ -76,8 +76,18 @@ export default function CaseDetail() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap mb-2">
                 <Badge variant="outline" className={`text-[11px] border ${st.bg}`}>{st.label}</Badge>
-                <span className="text-sm text-muted-foreground">{c.urgency}</span>
+                <Badge variant="outline" className={`text-[11px] border ${
+                  c.urgency === "immediate" ? "bg-red-500/15 text-red-400 border-red-500/30" :
+                  c.urgency === "soon" ? "bg-orange-500/15 text-orange-400 border-orange-500/30" :
+                  c.urgency === "normal" ? "bg-blue-500/15 text-blue-400 border-blue-500/30" :
+                  "bg-zinc-500/15 text-zinc-400 border-zinc-500/30"
+                }`}>{c.urgency}</Badge>
                 <span className="text-[11px] text-muted-foreground">{c.message_count} messages</span>
+                {c.next_scan_at && c.status !== "closed" && (
+                  <span className="text-[11px] text-cyan-400/70">
+                    Next scan: {new Date(c.next_scan_at).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                )}
               </div>
               <h1 className="text-xl font-bold text-foreground leading-tight">{c.title || `Case ${c.id.slice(0, 8)}`}</h1>
               {c.summary && <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{c.summary}</p>}
