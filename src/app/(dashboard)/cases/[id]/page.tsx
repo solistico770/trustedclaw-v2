@@ -63,63 +63,74 @@ export default function CaseDetail() {
         Back to Cases
       </button>
 
-      {/* Header card */}
-      <Card className="border-border/50">
-        <CardContent className="p-6">
-          <div className="flex items-start gap-4">
-            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-bold shrink-0 ${
-              c.importance >= 8 ? "bg-red-500/15 text-red-400" :
-              c.importance >= 5 ? "bg-amber-500/15 text-amber-400" :
-              "bg-blue-500/15 text-blue-400"
-            }`}>{c.importance}</div>
+      {/* Title */}
+      <div>
+        <h1 className="text-2xl font-bold text-foreground leading-tight">{c.title || `Case ${c.id.slice(0, 8)}`}</h1>
+        {c.summary && <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{c.summary}</p>}
+      </div>
 
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap mb-2">
-                <Badge variant="outline" className={`text-[11px] border ${st.bg}`}>{st.label}</Badge>
-                <Badge variant="outline" className={`text-[11px] border ${
-                  c.urgency === "immediate" ? "bg-red-500/15 text-red-400 border-red-500/30" :
-                  c.urgency === "soon" ? "bg-orange-500/15 text-orange-400 border-orange-500/30" :
-                  c.urgency === "normal" ? "bg-blue-500/15 text-blue-400 border-blue-500/30" :
-                  "bg-zinc-500/15 text-zinc-400 border-zinc-500/30"
-                }`}>{c.urgency}</Badge>
-                <span className="text-[11px] text-muted-foreground">{c.message_count} messages</span>
-                {c.next_scan_at && c.status !== "closed" && (
-                  <span className="text-[11px] text-cyan-400/70">
-                    Next scan: {new Date(c.next_scan_at).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                )}
-              </div>
-              <h1 className="text-xl font-bold text-foreground leading-tight">{c.title || `Case ${c.id.slice(0, 8)}`}</h1>
-              {c.summary && <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{c.summary}</p>}
-            </div>
-          </div>
+      {/* Info grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border/50 rounded-xl overflow-hidden">
+        <div className="bg-card p-4">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Status</p>
+          <p className={`text-base font-bold mt-1 ${st.bg.split(" ").find(c => c.startsWith("text-")) || "text-foreground"}`}>{st.label}</p>
+        </div>
+        <div className="bg-card p-4">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Urgency</p>
+          <p className={`text-base font-bold mt-1 ${
+            c.urgency === "immediate" ? "text-red-600 dark:text-red-400" :
+            c.urgency === "soon" ? "text-orange-600 dark:text-orange-400" :
+            c.urgency === "normal" ? "text-blue-600 dark:text-blue-400" : "text-zinc-500"
+          }`}>{c.urgency}</p>
+        </div>
+        <div className="bg-card p-4">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Importance</p>
+          <p className={`text-2xl font-black mt-1 ${
+            c.importance >= 8 ? "text-red-600 dark:text-red-400" :
+            c.importance >= 5 ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"
+          }`}>{c.importance}<span className="text-sm font-normal text-muted-foreground">/10</span></p>
+        </div>
+        <div className="bg-card p-4">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next Scan</p>
+          <p className="text-base font-bold mt-1 text-foreground/80">
+            {c.next_scan_at && c.status !== "closed"
+              ? new Date(c.next_scan_at).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+              : "—"}
+          </p>
+        </div>
+      </div>
 
-          {/* Entities */}
-          {data.entities?.length > 0 && (
-            <div className="flex gap-2 flex-wrap mt-4 pt-4 border-t border-border/50">
+      {/* Entities */}
+      {data.entities?.length > 0 && (
+        <Card className="border-border/50">
+          <CardContent className="p-4">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Connected Entities</p>
+            <div className="flex gap-2 flex-wrap">
               {data.entities.map((ce: { entities: { canonical_name: string; type: string; status: string } | null }, i: number) => (
-                <span key={i} className={`text-xs px-2.5 py-1 rounded-lg ${
-                  ce.entities?.status === "active" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
-                  "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                <span key={i} className={`text-sm px-3 py-1.5 rounded-lg font-medium ${
+                  ce.entities?.status === "active"
+                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300"
+                    : "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
                 }`}>
-                  {ce.entities?.canonical_name} <span className="opacity-60">({ce.entities?.type})</span>
-                  {ce.entities?.status === "proposed" && " *"}
+                  {ce.entities?.canonical_name}
+                  <span className="opacity-50 ml-1 text-xs">({ce.entities?.type})</span>
+                  {ce.entities?.status === "proposed" && <span className="ml-1 text-xs">*</span>}
                 </span>
               ))}
             </div>
-          )}
+          </CardContent>
+        </Card>
+      )}
 
-          {/* Actions */}
-          <div className="flex gap-2 flex-wrap mt-4 pt-4 border-t border-border/50">
-            <Button size="sm" onClick={scanNow} disabled={scanning} className="bg-primary hover:bg-primary/90">
-              {scanning ? "Scanning..." : "Scan Now"}
-            </Button>
-            {c.status !== "in_progress" && <Button size="sm" variant="secondary" onClick={() => changeStatus("in_progress")}>Start Working</Button>}
-            {c.status !== "addressed" && <Button size="sm" variant="secondary" onClick={() => changeStatus("addressed")}>Addressed</Button>}
-            {c.status !== "closed" && <Button size="sm" variant="ghost" className="text-destructive" onClick={() => changeStatus("closed")}>Close</Button>}
-          </div>
-        </CardContent>
-      </Card>
+      {/* Actions */}
+      <div className="flex gap-2 flex-wrap">
+        <Button onClick={scanNow} disabled={scanning} className="bg-primary hover:bg-primary/90">
+          {scanning ? "Scanning..." : "Scan Now"}
+        </Button>
+        {c.status !== "in_progress" && <Button variant="secondary" onClick={() => changeStatus("in_progress")}>Start Working</Button>}
+        {c.status !== "addressed" && <Button variant="secondary" onClick={() => changeStatus("addressed")}>Addressed</Button>}
+        {c.status !== "closed" && <Button variant="ghost" className="text-destructive" onClick={() => changeStatus("closed")}>Close</Button>}
+      </div>
 
       {/* Tabs */}
       <div className="flex gap-1 bg-card rounded-xl p-1">
