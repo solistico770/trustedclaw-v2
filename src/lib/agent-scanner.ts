@@ -106,9 +106,12 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     const now = Date.now();
 
     // Minimum scan intervals based on importance
-    const minIntervalMs = imp >= 8 ? 60 * 60 * 1000        // 1 hour for critical
-                        : imp >= 5 ? 4 * 60 * 60 * 1000    // 4 hours for medium
-                        : 24 * 60 * 60 * 1000;              // 24 hours for low
+    const minIntervalMs = imp === 10 ? 20 * 1000             // 20 seconds for importance 10
+                        : imp === 9  ? 2 * 60 * 1000         // 2 minutes for 9
+                        : imp === 8  ? 5 * 60 * 1000         // 5 minutes for 8
+                        : imp >= 5   ? 60 * 60 * 1000        // 1 hour for 5-7
+                        : imp >= 3   ? 4 * 60 * 60 * 1000    // 4 hours for 3-4
+                        : 24 * 60 * 60 * 1000;               // 24 hours for 1-2
 
     const enforced = (!nextScan || nextScan.getTime() < now + minIntervalMs)
       ? new Date(now + minIntervalMs).toISOString()
