@@ -94,7 +94,7 @@ Return JSON with:
 3. "reasoning": brief explanation
 
 IMPORTANT SCALE: 1 = most critical/urgent, 5 = least. Lower number = higher priority.
-The system has a default scan schedule based on urgency×importance (e.g. 1×1=20s, 3×3=5m, 5×5=24h).
+The system has a default scan schedule based on urgency×importance (e.g. 1×1=5min, 3×3=1h, 5×5=24h).
 
 HOWEVER: you can OVERRIDE the default schedule with set_next_scan when it makes sense.
 Examples of when to override:

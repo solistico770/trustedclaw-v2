@@ -17,7 +17,6 @@ const TABS = [
   { key: "prompt", label: "Context Prompt" },
   { key: "skills", label: "Skills" },
   { key: "gates", label: "Gates" },
-  { key: "channels", label: "Channels" },
   { key: "entities", label: "Entities" },
 ];
 
@@ -38,7 +37,6 @@ export default function SettingsPage() {
       {tab === "prompt" && <PromptTab />}
       {tab === "skills" && <SkillsTab />}
       {tab === "gates" && <GatesTab />}
-      {tab === "channels" && <ChannelsTab />}
       {tab === "entities" && <EntitiesTab />}
     </div>
   );
