@@ -9,6 +9,7 @@ export type AgentCommand =
   | { type: "set_title"; value: string }
   | { type: "set_summary"; value: string }
   | { type: "set_next_scan"; value: string }
+  | { type: "set_empowerment_line"; value: string }
   | { type: "propose_entity"; name: string; entity_type: string; role: string }
   | { type: "merge_into"; target_case_id: string; reason: string }
   | { type: "pull_skill"; skill_name: string };
@@ -96,6 +97,7 @@ Return JSON with:
    - {"type": "set_importance", "value": 1-5} — 1=CRITICAL (highest impact), 2=HIGH, 3=MEDIUM, 4=LOW, 5=MINIMAL
    - {"type": "set_title", "value": "short title"}
    - {"type": "set_next_scan", "value": "ISO8601 datetime"} — OPTIONAL override of default scan schedule
+   - {"type": "set_empowerment_line", "value": "short empowering message about owner's management, max 100 chars"}
    - {"type": "set_summary", "value": "1-2 sentences"}
    - {"type": "propose_entity", "name": "name", "entity_type": "person|company|project|invoice|other", "role": "primary|related|mentioned"}
    - {"type": "merge_into", "target_case_id": "UUID", "reason": "why"}

@@ -195,6 +195,7 @@ export default function CaseDetail() {
             api_commands: Array<{ type: string; value?: unknown; name?: string }>;
             commands_executed?: Array<{ type: string; status: string; detail?: string }>;
             skills_pulled?: string[];
+            empowerment_line?: string;
             tokens_used: number; duration_ms: number; error_message?: string; created_at: string;
           }) => (
             <Card key={ev.id} className="border-border/50">
@@ -206,6 +207,13 @@ export default function CaseDetail() {
                   <span className="text-[11px] text-muted-foreground">{new Date(ev.created_at).toLocaleString("he-IL")}</span>
                   <span className="text-[11px] text-muted-foreground mr-auto">{ev.tokens_used} tokens · {ev.duration_ms}ms</span>
                 </div>
+
+                {/* Empowerment line */}
+                {ev.empowerment_line && (
+                  <div className="bg-primary/5 dark:bg-primary/10 border border-primary/20 rounded-lg px-3 py-2 text-xs text-foreground/80">
+                    {ev.empowerment_line}
+                  </div>
+                )}
 
                 {/* AI Response */}
                 {ev.out_raw?.reasoning && (

@@ -112,8 +112,8 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
         .map(s => `SKILL: ${s.name}\n${s.instructions}`);
 
       const secondPass = await callAgent(
-        contextPrompt, msgList, openCases || [], skills,
-        [...pulledInstructions, ...newPulledInstructions], previousSummary
+        contextPrompt, msgList, openCases, skills,
+        [...pulledInstructions, ...newPulledInstructions], existingEntityNames, previousSummary
       );
 
       finalResponse = secondPass.response;
@@ -156,6 +156,7 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       api_commands: finalResponse.commands,
       commands_executed: commandsExecuted,
       skills_pulled: allPulledSkills,
+      empowerment_line: finalResponse.commands.find(c => c.type === "set_empowerment_line")?.value || null,
       tokens_used: totalTokens,
       model_used: "gemini-2.5-flash",
       duration_ms: totalDuration,
@@ -230,6 +231,10 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
         case "set_next_scan":
           updates.next_scan_at = cmd.value;
           results.push({ type: "set_next_scan", status: "ok", detail: cmd.value });
+          break;
+        case "set_empowerment_line":
+          // Stored on case_events, not cases — handled after executeCommands
+          results.push({ type: "set_empowerment_line", status: "ok", detail: cmd.value.slice(0, 100) });
           break;
         case "propose_entity": {
           const normalized = cmd.name.trim();
