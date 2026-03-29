@@ -67,9 +67,10 @@ export default function CasesBoard() {
   const router = useRouter();
 
   const load = useCallback(async () => {
-    const activeFilter = dashFilter || filter;
+    // "critical" is not a status — it's urgency<=1. Fetch all open, filter client-side.
+    const statusFilter = (dashFilter === "critical") ? "" : (dashFilter || filter);
     const [casesData, statsData] = await Promise.all([
-      fetch(`/api/cases?user_id=${DEMO_USER_ID}${activeFilter ? `&status=${activeFilter}` : ""}`).then(r => r.json()),
+      fetch(`/api/cases?user_id=${DEMO_USER_ID}${statusFilter ? `&status=${statusFilter}` : ""}`).then(r => r.json()),
       fetch(`/api/cases/stats?user_id=${DEMO_USER_ID}`).then(r => r.json()),
     ]);
     if (Array.isArray(casesData)) setCases(casesData);
@@ -98,6 +99,8 @@ export default function CasesBoard() {
   }
 
   const filtered = cases.filter(c => {
+    // Dashboard "critical" filter = urgency 1
+    if (dashFilter === "critical" && c.urgency > 1) return false;
     if (!search) return true;
     const s = search.toLowerCase();
     return (c.title || "").toLowerCase().includes(s) || (c.summary || "").toLowerCase().includes(s) ||
