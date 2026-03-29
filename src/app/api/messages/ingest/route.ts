@@ -42,8 +42,8 @@ export async function POST(req: NextRequest) {
     const { data: newCase, error: caseErr } = await db.from("cases").insert({
       user_id,
       status: "pending",
-      urgency: "normal",
-      importance: 5,
+      urgency: 3,
+      importance: 3,
       message_count: 1,
       first_message_at: now,
       last_message_at: now,

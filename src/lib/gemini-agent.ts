@@ -8,7 +8,6 @@ export type AgentCommand =
   | { type: "set_importance"; value: number }
   | { type: "set_title"; value: string }
   | { type: "set_summary"; value: string }
-  | { type: "set_next_scan"; value: string }
   | { type: "propose_entity"; name: string; entity_type: string; role: string }
   | { type: "merge_into"; target_case_id: string; reason: string }
   | { type: "pull_skill"; skill_name: string };
@@ -82,21 +81,23 @@ Return JSON with:
 
 2. "commands": array of:
    - {"type": "set_status", "value": "open|action_needed|in_progress|addressed|scheduled|escalated"}
-   - {"type": "set_urgency", "value": "immediate|soon|normal|low"}
-   - {"type": "set_importance", "value": 1-10}
+   - {"type": "set_urgency", "value": 1-5} — 1=CRITICAL (needs attention NOW), 2=HIGH, 3=MEDIUM, 4=LOW, 5=MINIMAL
+   - {"type": "set_importance", "value": 1-5} — 1=CRITICAL (highest impact), 2=HIGH, 3=MEDIUM, 4=LOW, 5=MINIMAL
    - {"type": "set_title", "value": "short title"}
    - {"type": "set_summary", "value": "1-2 sentences"}
-   - {"type": "set_next_scan", "value": "ISO8601 datetime"}
    - {"type": "propose_entity", "name": "name", "entity_type": "person|company|project|invoice|other", "role": "primary|related|mentioned"}
    - {"type": "merge_into", "target_case_id": "UUID", "reason": "why"}
-   - {"type": "pull_skill", "skill_name": "exact skill name"} — use this to request full instructions for a skill you need
+   - {"type": "pull_skill", "skill_name": "exact skill name"} — request full instructions for a skill
 
 3. "reasoning": brief explanation
 
-For standalone: always include set_status, set_urgency, set_importance, set_title, set_summary, set_next_scan.
+IMPORTANT SCALE: 1 = most critical/urgent, 5 = least. Lower number = higher priority.
+The system uses urgency×importance to determine scan frequency. urgency=1 + importance=1 = scan every 20 seconds.
+
+For standalone: always include set_status, set_urgency, set_importance, set_title, set_summary.
+Do NOT include set_next_scan — the system calculates it automatically from urgency×importance.
 For merge: only merge_into.
-Only propose entities that are REAL things (people, companies, projects). Don't re-propose entities already connected.
-Use pull_skill when you need specific instructions for handling a situation.
+Only propose entities that are REAL things (people, companies, projects). Don't re-propose already connected ones.
 
 Return ONLY valid JSON.`;
 

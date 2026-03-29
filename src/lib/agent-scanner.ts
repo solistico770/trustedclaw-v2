@@ -1,6 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { callAgent, AgentCommand, Skill } from "./gemini-agent";
 import { logAudit } from "./audit";
+import { getScanIntervalSeconds } from "./scan-intervals";
 
 export type ScanCaseResult = {
   case_id: string;
@@ -99,27 +100,16 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     const executionResults = await executeCommands(db, caseId, userId, finalResponse.commands);
     commandsExecuted.push(...executionResults);
 
-    // 10. Update last_scanned_at + enforce minimum next_scan_at
-    const { data: updatedCase } = await db.from("cases").select("next_scan_at, importance").eq("id", caseId).single();
-    const nextScan = updatedCase?.next_scan_at ? new Date(updatedCase.next_scan_at) : null;
-    const imp = updatedCase?.importance || 5;
-    const now = Date.now();
-
-    // Minimum scan intervals based on importance
-    const minIntervalMs = imp === 10 ? 20 * 1000             // 20 seconds for importance 10
-                        : imp === 9  ? 2 * 60 * 1000         // 2 minutes for 9
-                        : imp === 8  ? 5 * 60 * 1000         // 5 minutes for 8
-                        : imp >= 5   ? 60 * 60 * 1000        // 1 hour for 5-7
-                        : imp >= 3   ? 4 * 60 * 60 * 1000    // 4 hours for 3-4
-                        : 24 * 60 * 60 * 1000;               // 24 hours for 1-2
-
-    const enforced = (!nextScan || nextScan.getTime() < now + minIntervalMs)
-      ? new Date(now + minIntervalMs).toISOString()
-      : updatedCase?.next_scan_at || new Date(now + minIntervalMs).toISOString();
+    // 10. Update last_scanned_at + set next_scan from urgency×importance matrix
+    const { data: updatedCase } = await db.from("cases").select("urgency, importance").eq("id", caseId).single();
+    const urg = updatedCase?.urgency || 3;
+    const imp = updatedCase?.importance || 3;
+    const intervalSec = getScanIntervalSeconds(urg, imp);
+    const nextScanAt = new Date(Date.now() + intervalSec * 1000).toISOString();
 
     await db.from("cases").update({
       last_scanned_at: new Date().toISOString(),
-      next_scan_at: enforced,
+      next_scan_at: nextScanAt,
     }).eq("id", caseId);
 
     // 11. Save CaseEvent with full detail
@@ -206,10 +196,7 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
           updates.summary = cmd.value;
           results.push({ type: "set_summary", status: "ok" });
           break;
-        case "set_next_scan":
-          updates.next_scan_at = cmd.value;
-          results.push({ type: "set_next_scan", status: "ok", detail: cmd.value });
-          break;
+        // set_next_scan removed — system calculates from urgency×importance matrix
         case "propose_entity": {
           const { data: existing } = await db.from("entities")
             .select("id").eq("user_id", userId).ilike("canonical_name", cmd.name).in("status", ["active", "proposed"]).limit(1);

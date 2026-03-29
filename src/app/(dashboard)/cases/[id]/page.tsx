@@ -4,18 +4,24 @@ import { useParams, useRouter } from "next/navigation";
 import { DEMO_USER_ID } from "@/lib/constants";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { URGENCY_LABELS, IMPORTANCE_LABELS, LEVEL_COLORS, getScanIntervalSeconds, getScanIntervalLabel } from "@/lib/scan-intervals";
 
-const STATUS_STYLE: Record<string, { bg: string; label: string }> = {
-  pending: { bg: "bg-amber-500/20 text-amber-300 border-amber-500/30", label: "Pending Scan" },
-  open: { bg: "bg-blue-500/20 text-blue-300 border-blue-500/30", label: "Open" },
-  action_needed: { bg: "bg-red-500/20 text-red-300 border-red-500/30", label: "Action Needed" },
-  in_progress: { bg: "bg-violet-500/20 text-violet-300 border-violet-500/30", label: "In Progress" },
-  addressed: { bg: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30", label: "Addressed" },
-  scheduled: { bg: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30", label: "Scheduled" },
-  escalated: { bg: "bg-red-600/20 text-red-200 border-red-500/30", label: "Escalated" },
-  closed: { bg: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30", label: "Closed" },
+const STATUS_STYLE: Record<string, { color: string; label: string }> = {
+  pending: { color: "text-amber-600 dark:text-amber-400", label: "Pending" },
+  open: { color: "text-blue-600 dark:text-blue-400", label: "Open" },
+  action_needed: { color: "text-red-600 dark:text-red-400", label: "Action Needed" },
+  in_progress: { color: "text-violet-600 dark:text-violet-400", label: "In Progress" },
+  addressed: { color: "text-emerald-600 dark:text-emerald-400", label: "Addressed" },
+  scheduled: { color: "text-cyan-600 dark:text-cyan-400", label: "Scheduled" },
+  escalated: { color: "text-red-700 dark:text-red-300", label: "Escalated" },
+  closed: { color: "text-zinc-500", label: "Closed" },
 };
+
+function LevelDot({ level }: { level: number }) {
+  const c = LEVEL_COLORS[level] || LEVEL_COLORS[3];
+  return <span className={`inline-flex items-center justify-center w-8 h-8 rounded-lg text-sm font-bold ${c.bg} ${c.text}`}>{level}</span>;
+}
 
 export default function CaseDetail() {
   const { id } = useParams<{ id: string }>();
@@ -70,35 +76,40 @@ export default function CaseDetail() {
       </div>
 
       {/* Info grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border/50 rounded-xl overflow-hidden">
-        <div className="bg-card p-4">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Status</p>
-          <p className={`text-base font-bold mt-1 ${st.bg.split(" ").find(c => c.startsWith("text-")) || "text-foreground"}`}>{st.label}</p>
-        </div>
-        <div className="bg-card p-4">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Urgency</p>
-          <p className={`text-base font-bold mt-1 ${
-            c.urgency === "immediate" ? "text-red-600 dark:text-red-400" :
-            c.urgency === "soon" ? "text-orange-600 dark:text-orange-400" :
-            c.urgency === "normal" ? "text-blue-600 dark:text-blue-400" : "text-zinc-500"
-          }`}>{c.urgency}</p>
-        </div>
-        <div className="bg-card p-4">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Importance</p>
-          <p className={`text-2xl font-black mt-1 ${
-            c.importance >= 8 ? "text-red-600 dark:text-red-400" :
-            c.importance >= 5 ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400"
-          }`}>{c.importance}<span className="text-sm font-normal text-muted-foreground">/10</span></p>
-        </div>
-        <div className="bg-card p-4">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next Scan</p>
-          <p className="text-base font-bold mt-1 text-foreground/80">
-            {c.next_scan_at && c.status !== "closed"
-              ? new Date(c.next_scan_at).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
-              : "—"}
-          </p>
-        </div>
-      </div>
+      {(() => {
+        const scanInterval = getScanIntervalSeconds(c.urgency, c.importance);
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border/50 rounded-xl overflow-hidden">
+            <div className="bg-card p-4">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Status</p>
+              <p className={`text-lg font-bold mt-1 ${st.color}`}>{st.label}</p>
+            </div>
+            <div className="bg-card p-4">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Urgency</p>
+              <div className="flex items-center gap-2 mt-1">
+                <LevelDot level={c.urgency} />
+                <span className="text-sm font-medium">{URGENCY_LABELS[c.urgency]}</span>
+              </div>
+            </div>
+            <div className="bg-card p-4">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Importance</p>
+              <div className="flex items-center gap-2 mt-1">
+                <LevelDot level={c.importance} />
+                <span className="text-sm font-medium">{IMPORTANCE_LABELS[c.importance]}</span>
+              </div>
+            </div>
+            <div className="bg-card p-4">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Next Scan</p>
+              <p className="text-lg font-bold mt-1 text-foreground/80">
+                {c.next_scan_at && c.status !== "closed"
+                  ? new Date(c.next_scan_at).toLocaleString("he-IL", { hour: "2-digit", minute: "2-digit" })
+                  : "—"}
+              </p>
+              <p className="text-[10px] text-muted-foreground">every {getScanIntervalLabel(scanInterval)}</p>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Entities */}
       {data.entities?.length > 0 && (
