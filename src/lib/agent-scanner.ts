@@ -99,8 +99,25 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     const executionResults = await executeCommands(db, caseId, userId, finalResponse.commands);
     commandsExecuted.push(...executionResults);
 
-    // 10. Update last_scanned_at
-    await db.from("cases").update({ last_scanned_at: new Date().toISOString() }).eq("id", caseId);
+    // 10. Update last_scanned_at + enforce minimum next_scan_at
+    const { data: updatedCase } = await db.from("cases").select("next_scan_at, importance").eq("id", caseId).single();
+    const nextScan = updatedCase?.next_scan_at ? new Date(updatedCase.next_scan_at) : null;
+    const imp = updatedCase?.importance || 5;
+    const now = Date.now();
+
+    // Minimum scan intervals based on importance
+    const minIntervalMs = imp >= 8 ? 60 * 60 * 1000        // 1 hour for critical
+                        : imp >= 5 ? 4 * 60 * 60 * 1000    // 4 hours for medium
+                        : 24 * 60 * 60 * 1000;              // 24 hours for low
+
+    const enforced = (!nextScan || nextScan.getTime() < now + minIntervalMs)
+      ? new Date(now + minIntervalMs).toISOString()
+      : updatedCase?.next_scan_at || new Date(now + minIntervalMs).toISOString();
+
+    await db.from("cases").update({
+      last_scanned_at: new Date().toISOString(),
+      next_scan_at: enforced,
+    }).eq("id", caseId);
 
     // 11. Save CaseEvent with full detail
     const eventType = caseData.status === "pending" ? "initial_scan" :

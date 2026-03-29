@@ -2,7 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase-server";
 import { scanCase, ScanCaseResult } from "@/lib/agent-scanner";
 
+// GET for Vercel Cron (cron sends GET)
+export async function GET(req: NextRequest) {
+  return handleScan(req);
+}
+
 export async function POST(req: NextRequest) {
+  return handleScan(req);
+}
+
+async function handleScan(req: NextRequest) {
   const startTime = Date.now();
   const triggeredBy = req.headers.get("x-triggered-by") || "vercel_cron";
   const scanAll = req.headers.get("x-scan-all") === "true";
