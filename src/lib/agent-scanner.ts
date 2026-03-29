@@ -206,8 +206,9 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
           results.push({ type: "set_next_scan", status: "ok", detail: cmd.value });
           break;
         case "propose_entity": {
+          // Check ALL entities by name — avoid any duplicates
           const { data: existing } = await db.from("entities")
-            .select("id").eq("user_id", userId).ilike("canonical_name", cmd.name).in("status", ["active", "proposed"]).limit(1);
+            .select("id").eq("user_id", userId).ilike("canonical_name", cmd.name).limit(1);
           if (existing && existing.length > 0) {
             await db.from("case_entities").upsert({ case_id: caseId, entity_id: existing[0].id, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
             results.push({ type: "propose_entity", status: "linked_existing", detail: cmd.name });

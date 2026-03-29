@@ -111,36 +111,41 @@ export default function CaseDetail() {
         );
       })()}
 
-      {/* Entities */}
-      {data.entities?.length > 0 && (
-        <Card className="border-border/50">
-          <CardContent className="p-4">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Connected Entities</p>
-            <div className="flex gap-2 flex-wrap">
-              {data.entities.map((ce: { entities: { canonical_name: string; type: string; status: string } | null }, i: number) => (
-                <span key={i} className={`text-sm px-3 py-1.5 rounded-lg font-medium ${
-                  ce.entities?.status === "active"
-                    ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300"
-                    : "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
-                }`}>
-                  {ce.entities?.canonical_name}
-                  <span className="opacity-50 ml-1 text-xs">({ce.entities?.type})</span>
-                  {ce.entities?.status === "proposed" && <span className="ml-1 text-xs">*</span>}
-                </span>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Entities — deduped */}
+      {(() => {
+        const seen = new Set<string>();
+        const deduped = (data.entities || []).filter((ce: { entities: { canonical_name: string } | null }) => {
+          const n = ce.entities?.canonical_name?.toLowerCase();
+          if (!n || seen.has(n)) return false;
+          seen.add(n);
+          return true;
+        });
+        return deduped.length > 0 ? (
+          <Card className="border-border/50">
+            <CardContent className="p-4">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Connected Entities</p>
+              <div className="flex gap-2 flex-wrap">
+                {deduped.map((ce: { entities: { canonical_name: string; type: string } | null }, i: number) => (
+                  <span key={i} className="text-sm px-3 py-1.5 rounded-lg font-medium bg-secondary text-secondary-foreground">
+                    {ce.entities?.canonical_name}
+                    <span className="opacity-50 ml-1 text-xs">({ce.entities?.type})</span>
+                  </span>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null;
+      })()}
 
       {/* Actions */}
       <div className="flex gap-2 flex-wrap">
         <Button onClick={scanNow} disabled={scanning} className="bg-primary hover:bg-primary/90">
           {scanning ? "Scanning..." : "Scan Now"}
         </Button>
-        {c.status !== "in_progress" && <Button variant="secondary" onClick={() => changeStatus("in_progress")}>Start Working</Button>}
-        {c.status !== "addressed" && <Button variant="secondary" onClick={() => changeStatus("addressed")}>Addressed</Button>}
+        {c.status !== "in_progress" && c.status !== "closed" && <Button variant="secondary" onClick={() => changeStatus("in_progress")}>Start Working</Button>}
+        {c.status !== "addressed" && c.status !== "closed" && <Button variant="secondary" onClick={() => changeStatus("addressed")}>Addressed</Button>}
         {c.status !== "closed" && <Button variant="ghost" className="text-destructive" onClick={() => changeStatus("closed")}>Close</Button>}
+        {c.status === "closed" && <Button variant="secondary" onClick={() => changeStatus("open")}>Reopen</Button>}
       </div>
 
       {/* Tabs */}
