@@ -15,6 +15,9 @@ export async function GET(req: NextRequest) {
   const q = sp.get("q");
   if (q) query = query.ilike("canonical_name", `%${q}%`);
 
+  const type = sp.get("type");
+  if (type) query = query.eq("type", type);
+
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);
