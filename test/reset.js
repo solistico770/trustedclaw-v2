@@ -20,18 +20,46 @@ async function main() {
 
   // ── WIPE ALL DATA (order matters for FK constraints) ──
   console.log("\n--- Wiping all data ---");
+
+  // 1. Clear admin_entity_id FK on user_settings first
+  await db.from("user_settings").update({ admin_entity_id: null }).eq("user_id", userId);
+
+  // 2. Audit + events + scan logs (no FK deps)
   await db.from("audit_logs").delete().eq("user_id", userId);
   await db.from("case_events").delete().eq("user_id", userId);
   await db.from("scan_logs").delete().eq("user_id", userId);
+
+  // 3. Tasks (has entity_id FK → must go before entities)
   await db.from("tasks").delete().eq("user_id", userId);
-  await db.from("case_entities").delete().neq("id", "00000000-0000-0000-0000-000000000000"); // delete all
+
+  // 4. case_entities (junction — no user_id, delete via case + entity)
+  const { data: userCases } = await db.from("cases").select("id").eq("user_id", userId);
+  for (const c of userCases || []) {
+    await db.from("case_entities").delete().eq("case_id", c.id);
+  }
+  const { data: userEntities } = await db.from("entities").select("id").eq("user_id", userId);
+  for (const e of userEntities || []) {
+    await db.from("case_entities").delete().eq("entity_id", e.id);
+  }
+
+  // 5. Signals (has case_id FK)
   await db.from("signals").delete().eq("user_id", userId);
+
+  // 6. Cases (now safe — no signals/tasks/case_entities pointing to them)
   await db.from("cases").delete().eq("user_id", userId);
-  await db.from("entities").delete().eq("user_id", userId);
+
+  // 7. Entities (now safe — no tasks/case_entities pointing to them)
+  const { error: entErr } = await db.from("entities").delete().eq("user_id", userId);
+  if (entErr) console.error("Entity delete error:", entErr.message);
+
+  // 8. Skills, gates, settings
   await db.from("skills").delete().eq("user_id", userId);
   await db.from("gates").delete().eq("user_id", userId);
   await db.from("user_settings").delete().eq("user_id", userId);
-  console.log("All data wiped.");
+
+  // Verify
+  const { count: remaining } = await db.from("entities").select("*", { count: "exact", head: true }).eq("user_id", userId);
+  console.log(`All data wiped. Entities remaining: ${remaining || 0}`);
 
   // ── SETTINGS ──
   await db.from("user_settings").upsert({

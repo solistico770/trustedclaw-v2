@@ -1,0 +1,3 @@
+[auth]
+site_url = "https://trustedclaw.vercel.app"
+additional_redirect_urls = ["https://trustedclaw.vercel.app/auth/callback", "https://tc.kadabrix.com/auth/callback"]
