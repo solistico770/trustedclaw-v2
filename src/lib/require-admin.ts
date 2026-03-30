@@ -13,16 +13,17 @@ type AuthError = {
 };
 
 export async function requireAdmin(): Promise<AuthSuccess | AuthError> {
-  const supabase = await createServerClient();
-  const { data: { user }, error } = await supabase.auth.getUser();
+  // Cookie-based client to verify the user's session
+  const authClient = await createServerClient();
+  const { data: { user }, error } = await authClient.auth.getUser();
 
   if (error || !user) {
     return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
 
-  // Use service client for profile check (anon RLS can fail in some contexts)
-  const serviceDb = createServiceClient();
-  const { data: profile } = await serviceDb
+  // Service client for all DB queries (bypasses RLS issues in API route context)
+  const supabase = createServiceClient();
+  const { data: profile } = await supabase
     .from("profiles")
     .select("role")
     .eq("id", user.id)
@@ -32,6 +33,7 @@ export async function requireAdmin(): Promise<AuthSuccess | AuthError> {
     return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
 
+  // Return service client — all API queries use it with user.id for scoping
   return { user, profile, supabase };
 }
 
