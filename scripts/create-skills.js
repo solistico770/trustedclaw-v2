@@ -52,12 +52,44 @@ GROUPING: Use group_key to group related signals into one case.
 Same sender + same topic = same group_key.`,
   },
   {
-    name: "entity-management",
-    summary: "How to create and manage entities (people, companies) with contact info",
+    name: "create-entity-group",
+    summary: "How to create and manage entity groups/types (categories of entities like person, company, project)",
     auto_attach: true,
-    instructions: `ENTITY MANAGEMENT SKILL
+    instructions: `CREATE ENTITY GROUP SKILL
 
-Every case involves real people and organizations. Extract them.
+Entity groups (entity_types) define CATEGORIES of entities. Each group has a slug, display name, icon, color, and optional context instructions.
+
+DEFAULT GROUPS: person, company, project, invoice, bank_account, contract, product, bot, other
+
+WHEN TO CREATE A NEW GROUP:
+- When you encounter entities that don't fit existing groups
+- When the owner discusses a new category (e.g. "properties", "vehicles", "suppliers")
+- When context instructions are needed for how to handle a specific type
+
+GROUP FIELDS:
+- slug: lowercase-kebab-case identifier (e.g. "real-estate", "supplier")
+- display_name: Human-readable name (Hebrew OK, e.g. "נכסים", "ספקים")
+- icon: emoji to represent the group (e.g. "🏠", "🏢")
+- color: hex color for UI (e.g. "#4CAF50")
+- context: Instructions to the AI about how to handle entities in this group
+
+CONTEXT FIELD IS POWERFUL:
+- Add rules like "always extract address and price for real-estate entities"
+- Add rules like "always link supplier entities to invoice cases"
+- Add domain-specific knowledge about what data to collect
+
+RULES:
+- Don't create duplicate groups — check existing entity_types first
+- Use meaningful slugs that are self-explanatory
+- Default groups (person, company, project) should not be recreated`,
+  },
+  {
+    name: "entity",
+    summary: "How to create, identify, and link entities (people, companies, projects) to cases",
+    auto_attach: true,
+    instructions: `ENTITY SKILL
+
+Every case involves real people and organizations. You MUST extract and link them.
 
 ALWAYS CREATE ENTITIES FOR:
 - People who send messages (name from WA contact)
@@ -66,20 +98,79 @@ ALWAYS CREATE ENTITIES FOR:
 - Projects or deals discussed
 
 ENTITY FIELDS:
-- name: Full name as it appears (Hebrew is fine)
-- entity_type: person | company | project | other
+- canonical_name: Full name as it appears (Hebrew is fine, e.g. "חיים כהן")
+- type: must match an entity_type slug (person, company, project, etc.)
 - role: primary (main person case is about) | related (involved) | mentioned (just referenced)
 - phone: Israeli format 972XXXXXXXXX if visible in signal
-- whatsapp_number: same as phone for WA contacts
-- telegram_handle: @username if from Telegram
+- aliases: alternative names/spellings (e.g. ["חיימי", "Chaim"])
+- status: proposed → active (after confirmation) → archived
 
-RULES:
-- One case should have 1-2 primary entities (the main people involved)
-- Don't create duplicate entities, check the ALREADY CONNECTED list
-- If you see a phone number in the message text, add it to the entity
+IDENTIFICATION RULES:
+- Check ALREADY CONNECTED entities before creating new ones
+- Same phone number = same entity (even if name differs)
+- Similar Hebrew names may be the same person — check aliases
 - If sender identifier has a phone number (like +972501234567), use it
-- Company names are entity_type=company
-- Person names are entity_type=person`,
+- WA IDs ending in @c.us often contain phone numbers — extract them
+
+LINKING TO CASES:
+- One case should have 1-2 primary entities
+- Additional entities are "related" or "mentioned"
+- An entity can be linked to MULTIPLE cases
+- When merging cases, merge entity links too
+
+DEDUPLICATION:
+- Before creating, search by phone number first
+- Then search by canonical_name (case-insensitive)
+- Then search aliases
+- If found, link existing entity instead of creating new`,
+  },
+  {
+    name: "entity-data",
+    summary: "How to enrich entity metadata — phone, address, notes, relationships, and domain-specific data",
+    auto_attach: true,
+    instructions: `ENTITY DATA SKILL
+
+Entities have a metadata JSONB field for storing rich, structured data beyond the basic fields.
+
+ALWAYS EXTRACT AND STORE:
+- Phone numbers (Israeli: 972XXXXXXXXX, international: country code + number)
+- WhatsApp number (usually same as phone)
+- Telegram handle (@username)
+- Email addresses
+- Physical addresses
+- Company/organization affiliation
+- Role/title/position
+
+METADATA STRUCTURE (stored in entity.metadata JSONB):
+{
+  "phone": "972501234567",
+  "whatsapp": "972501234567",
+  "telegram": "@username",
+  "email": "name@example.com",
+  "address": "רחוב הרצל 10, תל אביב",
+  "company": "חברה בע״מ",
+  "title": "מנכ״ל",
+  "notes": "Free text notes about this entity",
+  "relationships": [
+    { "entity_name": "שם", "type": "partner" | "employee" | "client" | "supplier" }
+  ],
+  "custom": {} // domain-specific fields per entity_type context
+}
+
+ENRICHMENT RULES:
+- Extract data from signal content, not just sender info
+- If someone mentions "call me at 054-1234567" → update their phone
+- If someone says "I work at X" → update company field
+- Group chat names often contain useful context
+- Media messages (documents, images) may have metadata with names/numbers
+- Update existing data, don't overwrite with empty values
+- Keep notes concise — facts only, no opinions
+
+RELATIONSHIPS:
+- Track connections between entities
+- "דני עובד אצל חיים" → relationship: employee
+- "הספק שלנו, חברת ABC" → relationship: supplier
+- Relationships help the AI understand context in future cases`,
   },
   {
     name: "case-management",
