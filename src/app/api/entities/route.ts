@@ -7,7 +7,10 @@ export async function GET(req: NextRequest) {
   const { user, supabase } = auth;
 
   const sp = req.nextUrl.searchParams;
-  let query = supabase.from("entities").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(100);
+  const limit = parseInt(sp.get("limit") || "50");
+  const offset = parseInt(sp.get("offset") || "0");
+
+  let query = supabase.from("entities").select("*", { count: "exact" }).eq("user_id", user.id).order("created_at", { ascending: false });
 
   const status = sp.get("status");
   if (status) query = query.eq("status", status);
@@ -18,7 +21,7 @@ export async function GET(req: NextRequest) {
   const type = sp.get("type");
   if (type) query = query.eq("type", type);
 
-  const { data, error } = await query;
+  const { data, error, count } = await query.range(offset, offset + limit - 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data);
+  return NextResponse.json({ data, total: count, limit, offset });
 }

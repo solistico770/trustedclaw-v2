@@ -15,8 +15,11 @@ export async function GET(req: NextRequest) {
   const scheduled = url.searchParams.get("scheduled");
   const search = url.searchParams.get("search");
 
+  const limit = parseInt(url.searchParams.get("limit") || "50");
+  const offset = parseInt(url.searchParams.get("offset") || "0");
+
   let query = db.from("tasks")
-    .select("*, cases(case_number, title)")
+    .select("*, cases(case_number, title)", { count: "exact" })
     .eq("user_id", userId)
     .order("due_at", { ascending: true, nullsFirst: false });
 
@@ -45,9 +48,9 @@ export async function GET(req: NextRequest) {
   } else if (scheduled === "upcoming") query = query.gt("scheduled_at", now);
   else if (scheduled === "unscheduled") query = query.is("scheduled_at", null);
 
-  const { data, error } = await query;
+  const { data, error, count } = await query.range(offset, offset + limit - 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data || []);
+  return NextResponse.json({ data: data || [], total: count, limit, offset });
 }
 
 export async function POST(req: NextRequest) {
