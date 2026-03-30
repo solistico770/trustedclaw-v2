@@ -12,7 +12,10 @@ export type AgentCommand =
   | { type: "set_empowerment_line"; value: string }
   | { type: "propose_entity"; name: string; entity_type: string; role: string }
   | { type: "merge_into"; target_case_id: string; reason: string }
-  | { type: "pull_skill"; skill_name: string };
+  | { type: "pull_skill"; skill_name: string }
+  | { type: "create_task"; title: string; description?: string; scheduled_at?: string; due_at?: string }
+  | { type: "close_task"; task_id: string }
+  | { type: "update_task"; task_id: string; title?: string; scheduled_at?: string; due_at?: string };
 
 export type Skill = {
   id: string;
@@ -28,26 +31,116 @@ export type AgentResponse = {
   reasoning: string;
 };
 
+export type TriageDecision = {
+  signal_id: string;
+  action: "assign" | "create_case" | "ignore";
+  case_id?: string;
+  group_key?: string;
+  reasoning: string;
+};
+
+export type TriageResponse = {
+  decisions: TriageDecision[];
+  reasoning: string;
+};
+
+// ─── SIGNAL TRIAGE ──────────────────────────────────────────────────────────
+
+export async function triageSignals(
+  contextPrompt: string,
+  signals: Array<{ id: string; sender: string; content: string; gate_type: string; timestamp: string }>,
+  openCases: Array<{ id: string; case_number?: number; title: string; summary: string; importance: number; signal_count?: number; first_signal?: string | null; first_sender?: string | null }>,
+): Promise<{ response: TriageResponse; raw: string; tokens: number; durationMs: number }> {
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    generationConfig: { responseMimeType: "application/json" },
+  });
+
+  const signalsText = signals.map((s, i) =>
+    `[Signal ${i + 1}] id=${s.id} | ${s.timestamp} | gate=${s.gate_type} | ${s.sender}: ${s.content}`
+  ).join("\n");
+
+  const casesText = openCases.length > 0
+    ? openCases.map(c => {
+        const title = c.title || "(untitled)";
+        const firstSig = c.first_signal ? ` — first signal from ${c.first_sender || "?"}: "${c.first_signal.slice(0, 100)}"` : "";
+        return `- Case #${c.case_number || "?"} [${c.id}]: "${title}"${firstSig} (importance=${c.importance}, ${c.signal_count || 0} signals)`;
+      }).join("\n")
+    : "No open cases.";
+
+  const prompt = `${contextPrompt}
+
+---
+SIGNAL TRIAGE MODE
+
+You have ${signals.length} new pending signals that need to be triaged.
+Your job: decide what happens to each signal.
+
+PENDING SIGNALS:
+${signalsText}
+
+EXISTING OPEN CASES:
+${casesText}
+
+---
+INSTRUCTIONS:
+For each signal, decide ONE of:
+1. "assign" — this signal belongs to an existing case. Provide the case_id.
+2. "create_case" — this signal represents something new. A new case will be created.
+   If multiple signals should go into the SAME new case, give them the same "group_key" string.
+3. "ignore" — this signal is noise, spam, or not actionable. It will be discarded.
+
+Return JSON:
+{
+  "decisions": [
+    { "signal_id": "<uuid>", "action": "assign", "case_id": "<uuid>", "reasoning": "..." },
+    { "signal_id": "<uuid>", "action": "create_case", "group_key": "new-invoice-issue", "reasoning": "..." },
+    { "signal_id": "<uuid>", "action": "ignore", "reasoning": "..." }
+  ],
+  "reasoning": "overall triage summary"
+}
+
+IMPORTANT:
+- Look for patterns: multiple signals from same sender or about same topic → group them.
+- Check if any signal matches an existing case topic before creating a new case.
+- Only ignore signals that are genuinely noise (spam, duplicates, test messages).
+- Every signal_id from the input MUST appear in your decisions.
+
+Return ONLY valid JSON.`;
+
+  const startTime = Date.now();
+  const result = await model.generateContent(prompt);
+  const durationMs = Date.now() - startTime;
+  const raw = result.response.text();
+  const tokens = result.response.usageMetadata?.totalTokenCount || 0;
+  const response: TriageResponse = JSON.parse(raw);
+
+  return { response, raw, tokens, durationMs };
+}
+
+// ─── CASE REVIEW (existing, updated for signals + tasks) ────────────────────
+
 export async function callAgent(
   contextPrompt: string,
-  messages: Array<{ sender: string; content: string; timestamp: string }>,
+  signals: Array<{ sender: string; content: string; timestamp: string }>,
   openCases: Array<{ id: string; case_number?: number; title: string; summary: string; importance: number; message_count: number; first_message?: string | null; first_sender?: string | null }>,
   skills: Skill[],
   pulledSkillInstructions: string[],
   existingEntityNames: string[],
-  previousSummary?: string
+  previousSummary?: string,
+  openTasks?: Array<{ id: string; title: string; scheduled_at?: string | null; due_at?: string | null }>,
 ): Promise<{ response: AgentResponse; raw: string; tokens: number; durationMs: number; skillsPulled: string[] }> {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
     generationConfig: { responseMimeType: "application/json" },
   });
 
-  const messagesText = messages.map((m, i) => `[${i + 1}] ${m.timestamp} | ${m.sender}: ${m.content}`).join("\n");
+  const signalsText = signals.map((m, i) => `[${i + 1}] ${m.timestamp} | ${m.sender}: ${m.content}`).join("\n");
   const casesText = openCases.length > 0
     ? openCases.map(c => {
         const title = c.title || "(untitled)";
-        const firstMsg = c.first_message ? ` — first msg from ${c.first_sender || "?"}: "${c.first_message.slice(0, 100)}"` : "";
-        return `- Case #${c.case_number || "?"} [${c.id}]: "${title}"${firstMsg} (importance=${c.importance}, ${c.message_count} msgs)`;
+        const firstMsg = c.first_message ? ` — first signal from ${c.first_sender || "?"}: "${c.first_message.slice(0, 100)}"` : "";
+        return `- Case #${c.case_number || "?"} [${c.id}]: "${title}"${firstMsg} (importance=${c.importance}, ${c.message_count} signals)`;
       }).join("\n")
     : "No other open cases.";
 
@@ -55,7 +148,15 @@ export async function callAgent(
     ? `\nALREADY CONNECTED ENTITIES (do NOT re-propose these): ${existingEntityNames.join(", ")}`
     : "";
 
-  // Build skill map — summary for all, full instructions for auto_attach and pulled
+  const tasksText = (openTasks && openTasks.length > 0)
+    ? `\nOPEN TASKS FOR THIS CASE:\n${openTasks.map(t => {
+        const sched = t.scheduled_at ? ` scheduled=${t.scheduled_at}` : "";
+        const due = t.due_at ? ` due=${t.due_at}` : "";
+        return `- [${t.id}] "${t.title}"${sched}${due}`;
+      }).join("\n")}`
+    : "";
+
+  // Build skill map
   const skillMap = skills.filter(s => s.auto_attach || s.summary).map(s =>
     `- SKILL "${s.name}": ${s.summary}${s.auto_attach ? " [AUTO-ATTACHED]" : " [PULL with pull_skill command if needed]"}`
   ).join("\n");
@@ -77,9 +178,10 @@ ${activeSkillInstructions}
 ${skillMap || "No skills defined."}
 
 ---
-CASE MESSAGES:
-${messagesText}
+CASE SIGNALS:
+${signalsText}
 ${existingEntitiesText}
+${tasksText}
 
 ${previousSummary ? `PREVIOUS ANALYSIS:\n${previousSummary}\n` : ""}
 OTHER OPEN CASES (check for MERGE — if same topic/sender, use merge_into with the case ID):
@@ -101,7 +203,10 @@ Return JSON with:
    - {"type": "set_summary", "value": "1-2 sentences"}
    - {"type": "propose_entity", "name": "name", "entity_type": "person|company|project|invoice|other", "role": "primary|related|mentioned"}
    - {"type": "merge_into", "target_case_id": "UUID", "reason": "why"}
-   - {"type": "pull_skill", "skill_name": "exact skill name"} — request full instructions for a skill
+   - {"type": "pull_skill", "skill_name": "exact skill name"}
+   - {"type": "create_task", "title": "task title", "description": "optional detail", "scheduled_at": "ISO8601 or omit", "due_at": "ISO8601 or omit"}
+   - {"type": "close_task", "task_id": "UUID"} — close a completed task
+   - {"type": "update_task", "task_id": "UUID", "title": "new title", "scheduled_at": "ISO8601", "due_at": "ISO8601"}
 
 3. "reasoning": brief explanation
 
@@ -121,6 +226,8 @@ For standalone: always include set_status, set_urgency, set_importance, set_titl
 For merge: only merge_into.
 Only propose entities that are REAL things (people, companies, projects). Don't re-propose already connected ones.
 
+TASKS: Review the open tasks list. If a task is done based on signals, close it. If new actions are needed, create tasks with clear titles and dates. Use create_task to assign actionable follow-ups.
+
 CRITICAL: You MUST follow skills. Every action you take must be guided by a skill.
 - Auto-attached skills are already in your context — follow them.
 - If you need a non-attached skill, pull it first with pull_skill.
@@ -136,7 +243,7 @@ Return ONLY valid JSON.`;
 
   const response: AgentResponse = JSON.parse(raw);
 
-  // Check if any pull_skill commands — need second pass
+  // Check if any pull_skill commands
   const skillPulls = response.commands.filter(c => c.type === "pull_skill") as Array<{ type: "pull_skill"; skill_name: string }>;
   const pulledNames = skillPulls.map(s => s.skill_name);
 

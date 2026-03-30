@@ -16,6 +16,7 @@ type Case = {
 
 type Stats = {
   attention: number; critical: number; open: number; handled: number; entities: number;
+  pending_signals: number; overdue_tasks: number;
   last_scan_ago_sec: number | null; next_scan_in_sec: number | null; cases_scanned_today: number;
   latest_empowerment: string | null;
 };
@@ -86,6 +87,8 @@ export default function CasesBoard() {
 
   function clickDashStat(filterValue: string | null) {
     if (filterValue === "entities") { router.push("/entities"); return; }
+    if (filterValue === "pending_signals") { router.push("/signals?status=pending"); return; }
+    if (filterValue === "overdue_tasks") { router.push("/tasks?due=overdue"); return; }
     setDashFilter(prev => prev === filterValue ? null : filterValue);
     setFilter("");
   }
@@ -114,9 +117,11 @@ export default function CasesBoard() {
   if (loading) return <div className="space-y-3 animate-pulse">{[1,2,3].map(i => <div key={i} className="h-20 rounded-xl bg-card" />)}</div>;
 
   const dashStats = [
+    { key: "pending_signals", label: "Pending", value: stats?.pending_signals || 0, color: (stats?.pending_signals || 0) > 0 ? "text-amber-600 dark:text-amber-400" : "text-foreground/30", icon: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" },
     { key: "action_needed,escalated", label: "Attention", value: stats?.attention || 0, color: (stats?.attention || 0) > 0 ? "text-red-600 dark:text-red-400" : "text-foreground/30", icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.962-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" },
     { key: "critical", label: "Critical", value: stats?.critical || 0, color: (stats?.critical || 0) > 0 ? "text-red-600 dark:text-red-400" : "text-foreground/30", icon: "M13 10V3L4 14h7v7l9-11h-7z" },
     { key: "open,in_progress,scheduled", label: "Open", value: stats?.open || 0, color: "text-blue-600 dark:text-blue-400", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
+    { key: "overdue_tasks", label: "Overdue", value: stats?.overdue_tasks || 0, color: (stats?.overdue_tasks || 0) > 0 ? "text-red-600 dark:text-red-400" : "text-foreground/30", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
     { key: "addressed,closed", label: "Handled", value: stats?.handled || 0, color: "text-emerald-600 dark:text-emerald-400", icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" },
     { key: "entities", label: "Entities", value: stats?.entities || 0, color: "text-violet-600 dark:text-violet-400", icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" },
   ];
@@ -131,7 +136,7 @@ export default function CasesBoard() {
       )}
 
       {/* Dashboard stats — clickable */}
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
         {dashStats.map(s => {
           const active = dashFilter === s.key;
           return (
@@ -206,7 +211,7 @@ export default function CasesBoard() {
                     {entities.length > 2 && <span className="text-[10px] text-muted-foreground">+{entities.length - 2}</span>}
                   </div>
                   <div className="text-left shrink-0 w-20">
-                    <p className="text-[10px] text-muted-foreground">{c.message_count} msgs · {timeAgo(c.created_at)}</p>
+                    <p className="text-[10px] text-muted-foreground">{c.message_count} signals · {timeAgo(c.created_at)}</p>
                     <p className="text-[10px] text-muted-foreground">scan {c.next_scan_at ? timeUntil(c.next_scan_at) : "—"} <span className="opacity-50">({getScanIntervalLabel(scanInterval)})</span></p>
                   </div>
                   <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" onClick={e => e.stopPropagation()}>

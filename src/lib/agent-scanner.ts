@@ -1,7 +1,241 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { callAgent, AgentCommand, Skill } from "./gemini-agent";
+import { callAgent, triageSignals, AgentCommand, Skill, TriageDecision } from "./gemini-agent";
 import { logAudit } from "./audit";
 import { getScanIntervalSeconds } from "./scan-intervals";
+
+// ─── TRIAGE TYPES ───────────────────────────────────────────────────────────
+
+export type TriageResult = {
+  signals_triaged: number;
+  signals_assigned: number;
+  signals_ignored: number;
+  cases_created: number;
+  tokens: number;
+  duration_ms: number;
+  status: "success" | "skipped" | "failed";
+  error?: string;
+};
+
+// ─── SIGNAL TRIAGE (Pass 1) ─────────────────────────────────────────────────
+
+export async function triagePendingSignals(db: SupabaseClient, userId: string): Promise<TriageResult> {
+  try {
+    // Fetch pending signals (limit 20)
+    const { data: pendingSignals } = await db.from("signals")
+      .select("id, raw_payload, sender_identifier, gate_id, occurred_at, gates(type)")
+      .eq("user_id", userId).eq("status", "pending")
+      .order("occurred_at", { ascending: true })
+      .limit(20);
+
+    if (!pendingSignals || pendingSignals.length === 0) {
+      return { signals_triaged: 0, signals_assigned: 0, signals_ignored: 0, cases_created: 0, tokens: 0, duration_ms: 0, status: "skipped" };
+    }
+
+    // Fetch open case summaries
+    const { data: openCasesRaw } = await db.from("cases")
+      .select("id, case_number, title, summary, importance")
+      .eq("user_id", userId)
+      .in("status", ["open", "action_needed", "in_progress", "escalated"])
+      .order("importance", { ascending: false }).limit(15);
+
+    // Fetch first signal for each case for context
+    const openCases = [];
+    for (const oc of openCasesRaw || []) {
+      const { data: firstSig } = await db.from("signals")
+        .select("raw_payload, sender_identifier")
+        .eq("case_id", oc.id)
+        .order("occurred_at", { ascending: true })
+        .limit(1).single();
+      const { count } = await db.from("signals").select("*", { count: "exact", head: true }).eq("case_id", oc.id);
+      openCases.push({
+        ...oc,
+        first_signal: firstSig?.raw_payload?.content || null,
+        first_sender: firstSig?.sender_identifier || null,
+        signal_count: count || 0,
+      });
+    }
+
+    // Get context prompt
+    const { data: settings } = await db.from("user_settings").select("context_prompt, admin_entity_id").eq("user_id", userId).single();
+    let contextPrompt = settings?.context_prompt || "You are an operational agent.";
+
+    if (settings?.admin_entity_id) {
+      const { data: admin } = await db.from("entities").select("canonical_name, type").eq("id", settings.admin_entity_id).single();
+      if (admin) {
+        contextPrompt = `ADMIN IDENTITY: You work for "${admin.canonical_name}". All cases are managed on behalf of ${admin.canonical_name}.\n\n${contextPrompt}`;
+      }
+    }
+
+    // Build signal input for AI
+    const signalInput = pendingSignals.map(s => ({
+      id: s.id,
+      sender: s.sender_identifier || "Unknown",
+      content: s.raw_payload?.content || JSON.stringify(s.raw_payload),
+      gate_type: (s.gates as unknown as { type: string } | null)?.type || "unknown",
+      timestamp: s.occurred_at,
+    }));
+
+    // Call AI triage
+    const { response, raw, tokens, durationMs } = await triageSignals(contextPrompt, signalInput, openCases);
+
+    // Execute decisions
+    const result = await executeTriageDecisions(db, userId, response.decisions, pendingSignals, settings?.admin_entity_id);
+
+    // Log case event for triage
+    await db.from("case_events").insert({
+      case_id: result.firstCaseId || (openCasesRaw?.[0]?.id) || null,
+      user_id: userId,
+      event_type: "signal_triage",
+      in_context: { signals: signalInput, open_cases: openCases },
+      out_raw: response,
+      api_commands: response.decisions,
+      commands_executed: result.executionResults,
+      tokens_used: tokens,
+      model_used: "gemini-2.5-flash",
+      duration_ms: durationMs,
+      status: "success",
+    });
+
+    return {
+      signals_triaged: pendingSignals.length,
+      signals_assigned: result.assigned,
+      signals_ignored: result.ignored,
+      cases_created: result.casesCreated,
+      tokens,
+      duration_ms: durationMs,
+      status: "success",
+    };
+  } catch (err) {
+    return {
+      signals_triaged: 0, signals_assigned: 0, signals_ignored: 0, cases_created: 0,
+      tokens: 0, duration_ms: 0, status: "failed", error: String(err),
+    };
+  }
+}
+
+async function executeTriageDecisions(
+  db: SupabaseClient,
+  userId: string,
+  decisions: TriageDecision[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pendingSignals: any[],
+  adminEntityId?: string | null,
+) {
+  let assigned = 0;
+  let ignored = 0;
+  let casesCreated = 0;
+  let firstCaseId: string | null = null;
+  const executionResults: Array<{ signal_id: string; action: string; status: string; detail?: string }> = [];
+  const groupCases = new Map<string, string>(); // group_key → case_id
+
+  for (const decision of decisions) {
+    try {
+      if (decision.action === "assign" && decision.case_id) {
+        // Assign signal to existing case
+        await db.from("signals").update({
+          case_id: decision.case_id,
+          status: "processed",
+          processing_decision: { action: "assign", case_id: decision.case_id, reasoning: decision.reasoning },
+        }).eq("id", decision.signal_id);
+
+        // Update case signal count
+        const { count } = await db.from("signals").select("*", { count: "exact", head: true }).eq("case_id", decision.case_id);
+        await db.from("cases").update({
+          message_count: count || 0,
+          last_message_at: new Date().toISOString(),
+          next_scan_at: new Date().toISOString(),
+        }).eq("id", decision.case_id);
+
+        if (!firstCaseId) firstCaseId = decision.case_id;
+        assigned++;
+        executionResults.push({ signal_id: decision.signal_id, action: "assign", status: "ok", detail: decision.case_id.slice(0, 8) });
+
+        await logAudit(db, {
+          user_id: userId, actor: "agent", action_type: "signal_triaged",
+          target_type: "signal", target_id: decision.signal_id,
+          reasoning: `Assigned to case: ${decision.reasoning}`,
+        });
+
+      } else if (decision.action === "create_case") {
+        // Check if group_key already created a case
+        let caseId: string | null = null;
+        if (decision.group_key && groupCases.has(decision.group_key)) {
+          caseId = groupCases.get(decision.group_key)!;
+        } else {
+          // Create new case
+          const now = new Date().toISOString();
+          const { data: newCase } = await db.from("cases").insert({
+            user_id: userId, status: "open", urgency: 3, importance: 3,
+            message_count: 1, first_message_at: now, last_message_at: now, next_scan_at: now,
+          }).select("id").single();
+          caseId = newCase?.id || null;
+          if (caseId) {
+            casesCreated++;
+            if (decision.group_key) groupCases.set(decision.group_key, caseId);
+
+            // Auto-link admin entity if applicable
+            if (adminEntityId) {
+              const signal = pendingSignals.find(s => s.id === decision.signal_id);
+              if (signal?.gate_id) {
+                const { data: gate } = await db.from("gates").select("metadata").eq("id", signal.gate_id).single();
+                if (gate?.metadata?.is_admin_gate) {
+                  await db.from("case_entities").upsert(
+                    { case_id: caseId, entity_id: adminEntityId, role: "primary" },
+                    { onConflict: "case_id,entity_id" }
+                  );
+                }
+              }
+            }
+          }
+        }
+
+        if (caseId) {
+          await db.from("signals").update({
+            case_id: caseId,
+            status: "processed",
+            processing_decision: { action: "create_case", group_key: decision.group_key, reasoning: decision.reasoning },
+          }).eq("id", decision.signal_id);
+
+          // Update case count
+          const { count } = await db.from("signals").select("*", { count: "exact", head: true }).eq("case_id", caseId);
+          await db.from("cases").update({ message_count: count || 0, last_message_at: new Date().toISOString() }).eq("id", caseId);
+
+          if (!firstCaseId) firstCaseId = caseId;
+          assigned++;
+        }
+
+        executionResults.push({ signal_id: decision.signal_id, action: "create_case", status: "ok", detail: caseId?.slice(0, 8) });
+
+        await logAudit(db, {
+          user_id: userId, actor: "agent", action_type: "signal_triaged",
+          target_type: "signal", target_id: decision.signal_id,
+          reasoning: `New case: ${decision.reasoning}`,
+        });
+
+      } else if (decision.action === "ignore") {
+        await db.from("signals").update({
+          status: "ignored",
+          processing_decision: { action: "ignore", reasoning: decision.reasoning },
+        }).eq("id", decision.signal_id);
+
+        ignored++;
+        executionResults.push({ signal_id: decision.signal_id, action: "ignore", status: "ok" });
+
+        await logAudit(db, {
+          user_id: userId, actor: "agent", action_type: "signal_triaged",
+          target_type: "signal", target_id: decision.signal_id,
+          reasoning: `Ignored: ${decision.reasoning}`,
+        });
+      }
+    } catch (e) {
+      executionResults.push({ signal_id: decision.signal_id, action: decision.action, status: "error", detail: String(e).slice(0, 100) });
+    }
+  }
+
+  return { assigned, ignored, casesCreated, firstCaseId, executionResults };
+}
+
+// ─── CASE REVIEW (Pass 2) ──────────────────────────────────────────────────
 
 export type ScanCaseResult = {
   case_id: string;
@@ -24,14 +258,14 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     const { data: caseData } = await db.from("cases").select("*").eq("id", caseId).single();
     if (!caseData) throw new Error(`Case not found: ${caseId}`);
 
-    // 2. Get messages (last 20)
-    const { data: messages } = await db.from("messages")
+    // 2. Get signals (last 20) — was messages
+    const { data: signals } = await db.from("signals")
       .select("raw_payload, sender_identifier, occurred_at")
       .eq("case_id", caseId)
       .order("occurred_at", { ascending: true })
       .limit(20);
 
-    const msgList = (messages || []).map(m => ({
+    const sigList = (signals || []).map(m => ({
       sender: m.sender_identifier || m.raw_payload?.sender_name || "Unknown",
       content: m.raw_payload?.content || JSON.stringify(m.raw_payload),
       timestamp: m.occurred_at,
@@ -41,7 +275,6 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     const { data: settings } = await db.from("user_settings").select("context_prompt, admin_entity_id").eq("user_id", userId).single();
     let contextPrompt = settings?.context_prompt || "You are an operational agent.";
 
-    // Inject admin identity
     if (settings?.admin_entity_id) {
       const { data: admin } = await db.from("entities").select("canonical_name, type").eq("id", settings.admin_entity_id).single();
       if (admin) {
@@ -63,35 +296,33 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       .limit(1).single();
     const previousSummary = lastEvent?.out_raw?.reasoning;
 
-    // Get previously pulled skill instructions for continuity
     const prevPulled = lastEvent?.skills_pulled || [];
     const pulledInstructions = skills
       .filter(s => prevPulled.includes(s.name))
       .map(s => `SKILL: ${s.name}\n${s.instructions}`);
 
-    // 6. Get open cases for merge — include first message for context
+    // 6. Get open cases for merge
     const { data: openCasesRaw } = await db.from("cases")
       .select("id, case_number, title, summary, importance, message_count")
       .eq("user_id", userId).not("id", "eq", caseId)
       .in("status", ["open", "action_needed", "in_progress", "escalated"])
       .order("importance", { ascending: false }).limit(10);
 
-    // Fetch first message for each open case
     const openCases = [];
     for (const oc of openCasesRaw || []) {
-      const { data: firstMsg } = await db.from("messages")
+      const { data: firstSig } = await db.from("signals")
         .select("raw_payload, sender_identifier")
         .eq("case_id", oc.id)
         .order("occurred_at", { ascending: true })
         .limit(1).single();
       openCases.push({
         ...oc,
-        first_message: firstMsg?.raw_payload?.content || null,
-        first_sender: firstMsg?.sender_identifier || null,
+        first_message: firstSig?.raw_payload?.content || null,
+        first_sender: firstSig?.sender_identifier || null,
       });
     }
 
-    // 6.5 Get existing entities for this case — so agent doesn't re-propose
+    // 6.5 Get existing entities
     const { data: existingCaseEntities } = await db.from("case_entities")
       .select("entities(canonical_name, type)")
       .eq("case_id", caseId);
@@ -102,12 +333,17 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       })
       .filter(Boolean) as string[];
 
+    // 6.6 Get open tasks for this case
+    const { data: openTasks } = await db.from("tasks")
+      .select("id, title, scheduled_at, due_at")
+      .eq("case_id", caseId).eq("status", "open");
+
     // 7. Call agent
     const { response, raw, tokens, durationMs, skillsPulled } = await callAgent(
-      contextPrompt, msgList, openCases, skills, pulledInstructions, existingEntityNames, previousSummary
+      contextPrompt, sigList, openCases, skills, pulledInstructions, existingEntityNames, previousSummary, openTasks || []
     );
 
-    // 8. If skills were pulled, do a second call with full instructions
+    // 8. Second pass for pulled skills
     let finalResponse = response;
     let finalRaw = raw;
     let totalTokens = tokens;
@@ -120,8 +356,8 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
         .map(s => `SKILL: ${s.name}\n${s.instructions}`);
 
       const secondPass = await callAgent(
-        contextPrompt, msgList, openCases, skills,
-        [...pulledInstructions, ...newPulledInstructions], existingEntityNames, previousSummary
+        contextPrompt, sigList, openCases, skills,
+        [...pulledInstructions, ...newPulledInstructions], existingEntityNames, previousSummary, openTasks || []
       );
 
       finalResponse = secondPass.response;
@@ -134,24 +370,22 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     const executionResults = await executeCommands(db, caseId, userId, finalResponse.commands);
     commandsExecuted.push(...executionResults);
 
-    // 10. Update last_scanned_at. Use agent's next_scan_at if set, otherwise matrix default.
+    // 10. Update scan timing
     const { data: updatedCase } = await db.from("cases").select("urgency, importance, next_scan_at").eq("id", caseId).single();
     const agentSetNextScan = finalResponse.commands.some(c => c.type === "set_next_scan");
 
     const updateData: Record<string, unknown> = { last_scanned_at: new Date().toISOString() };
 
     if (!agentSetNextScan) {
-      // Agent didn't override — use matrix
       const urg = updatedCase?.urgency || 3;
       const imp = updatedCase?.importance || 3;
       const intervalSec = getScanIntervalSeconds(urg, imp);
       updateData.next_scan_at = new Date(Date.now() + intervalSec * 1000).toISOString();
     }
-    // else: agent already set next_scan_at via command executor
 
     await db.from("cases").update(updateData).eq("id", caseId);
 
-    // 11. Save CaseEvent with full detail
+    // 11. Save CaseEvent
     const eventType = caseData.status === "pending" ? "initial_scan" :
       triggeredBy === "manual" ? "manual_scan" : "scheduled_scan";
 
@@ -159,7 +393,7 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       case_id: caseId,
       user_id: userId,
       event_type: eventType,
-      in_context: { context_prompt: contextPrompt, messages: msgList, open_cases: openCases, skills_map: skills.map(s => ({ name: s.name, summary: s.summary, auto_attach: s.auto_attach })), previous_summary: previousSummary },
+      in_context: { context_prompt: contextPrompt, signals: sigList, open_cases: openCases, skills_map: skills.map(s => ({ name: s.name, summary: s.summary, auto_attach: s.auto_attach })), previous_summary: previousSummary, open_tasks: openTasks },
       out_raw: finalResponse,
       api_commands: finalResponse.commands,
       commands_executed: commandsExecuted,
@@ -190,7 +424,6 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       status: "success",
     };
   } catch (err) {
-    // Save failed CaseEvent
     await db.from("case_events").insert({
       case_id: caseId, user_id: userId, event_type: "scheduled_scan",
       in_context: {}, out_raw: {}, api_commands: [],
@@ -207,6 +440,8 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     };
   }
 }
+
+// ─── COMMAND EXECUTION ──────────────────────────────────────────────────────
 
 async function executeCommands(db: SupabaseClient, caseId: string, userId: string, commands: AgentCommand[]) {
   const results: Array<{ type: string; status: string; detail?: string }> = [];
@@ -241,7 +476,6 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
           results.push({ type: "set_next_scan", status: "ok", detail: cmd.value });
           break;
         case "set_empowerment_line":
-          // Stored on case_events, not cases — handled after executeCommands
           results.push({ type: "set_empowerment_line", status: "ok", detail: cmd.value.slice(0, 100) });
           break;
         case "propose_entity": {
@@ -250,7 +484,6 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
             results.push({ type: "propose_entity", status: "skipped", detail: "name too short" });
             break;
           }
-          // Check ALL entities by name — ilike + contains for partial matches
           const { data: existing } = await db.from("entities")
             .select("id").eq("user_id", userId)
             .or(`canonical_name.ilike.${normalized},canonical_name.ilike.%${normalized}%`)
@@ -266,12 +499,16 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
           break;
         }
         case "merge_into": {
-          await db.from("messages").update({ case_id: cmd.target_case_id }).eq("case_id", caseId);
+          // Move signals (was messages)
+          await db.from("signals").update({ case_id: cmd.target_case_id }).eq("case_id", caseId);
+          // Move tasks
+          await db.from("tasks").update({ case_id: cmd.target_case_id }).eq("case_id", caseId);
+          // Copy entities
           const { data: srcEnts } = await db.from("case_entities").select("entity_id, role").eq("case_id", caseId);
           for (const ce of srcEnts || []) {
             await db.from("case_entities").upsert({ case_id: cmd.target_case_id, entity_id: ce.entity_id, role: ce.role }, { onConflict: "case_id,entity_id" });
           }
-          const { count } = await db.from("messages").select("*", { count: "exact", head: true }).eq("case_id", cmd.target_case_id);
+          const { count } = await db.from("signals").select("*", { count: "exact", head: true }).eq("case_id", cmd.target_case_id);
           await db.from("cases").update({ message_count: count || 0, last_message_at: new Date().toISOString(), next_scan_at: new Date().toISOString() }).eq("id", cmd.target_case_id);
           await db.from("cases").update({ status: "merged", merged_into_case_id: cmd.target_case_id, next_scan_at: null, closed_at: new Date().toISOString() }).eq("id", caseId);
           results.push({ type: "merge_into", status: "ok", detail: cmd.target_case_id.slice(0, 8) });
@@ -280,6 +517,45 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
         case "pull_skill":
           results.push({ type: "pull_skill", status: "ok", detail: cmd.skill_name });
           break;
+        case "create_task": {
+          // Auto-create entity
+          const { data: entity } = await db.from("entities").insert({
+            user_id: userId, type: "task", canonical_name: cmd.title, status: "active",
+          }).select("id").single();
+          const entityId = entity?.id || null;
+
+          const { data: task } = await db.from("tasks").insert({
+            user_id: userId, case_id: caseId, entity_id: entityId,
+            title: cmd.title, description: cmd.description || null,
+            scheduled_at: cmd.scheduled_at || null, due_at: cmd.due_at || null,
+          }).select("id").single();
+
+          if (entityId) {
+            await db.from("case_entities").upsert(
+              { case_id: caseId, entity_id: entityId, role: "related" },
+              { onConflict: "case_id,entity_id" }
+            );
+          }
+          results.push({ type: "create_task", status: "ok", detail: `${cmd.title} (${task?.id?.slice(0, 8)})` });
+          break;
+        }
+        case "close_task": {
+          const { error: closeErr } = await db.from("tasks")
+            .update({ status: "closed", closed_at: new Date().toISOString() })
+            .eq("id", cmd.task_id).eq("case_id", caseId);
+          results.push({ type: "close_task", status: closeErr ? "error" : "ok", detail: cmd.task_id.slice(0, 8) });
+          break;
+        }
+        case "update_task": {
+          const taskUpdates: Record<string, unknown> = {};
+          if (cmd.title) taskUpdates.title = cmd.title;
+          if (cmd.scheduled_at !== undefined) taskUpdates.scheduled_at = cmd.scheduled_at;
+          if (cmd.due_at !== undefined) taskUpdates.due_at = cmd.due_at;
+          const { error: updateErr } = await db.from("tasks")
+            .update(taskUpdates).eq("id", cmd.task_id).eq("case_id", caseId);
+          results.push({ type: "update_task", status: updateErr ? "error" : "ok", detail: cmd.task_id.slice(0, 8) });
+          break;
+        }
       }
     } catch (e) {
       results.push({ type: cmd.type, status: "error", detail: String(e).slice(0, 100) });
@@ -292,7 +568,6 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
       console.error("[scanner] DB update failed:", updateError.message, "updates:", JSON.stringify(updates));
       results.push({ type: "db_update", status: "error", detail: updateError.message });
     } else {
-      // Verify the write actually stuck
       const { data: verify } = await db.from("cases").select("title, summary, urgency, importance").eq("id", caseId).single();
       if (verify && updates.title && verify.title !== updates.title) {
         console.error("[scanner] DB write mismatch! Expected title:", updates.title, "Got:", verify.title);

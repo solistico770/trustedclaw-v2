@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase-browser";
-import { ClipboardList, Users, FlaskConical, Cpu, Settings, LogOut, ChevronUp, UserCog } from "lucide-react";
+import { ClipboardList, Users, FlaskConical, Cpu, Settings, LogOut, ChevronUp, UserCog, Radio, CheckSquare } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
@@ -13,12 +13,24 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 
 const nav = [
   { href: "/", label: "Cases", icon: ClipboardList },
+  { href: "/signals", label: "Signals", icon: Radio },
+  { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/entities", label: "Entities", icon: Users },
   { href: "/simulate", label: "Simulate", icon: FlaskConical },
   { href: "/scan-monitor", label: "Scanner", icon: Cpu },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/settings/users", label: "Users", icon: UserCog },
 ];
+
+function deployAge() {
+  const bt = process.env.NEXT_PUBLIC_BUILD_TIME;
+  if (!bt) return "";
+  const min = Math.round((Date.now() - new Date(bt).getTime()) / 60000);
+  if (min < 1) return "<1m";
+  if (min < 60) return `${min}m`;
+  if (min < 1440) return `${Math.round(min / 60)}h`;
+  return `${Math.round(min / 1440)}d`;
+}
 
 export function AppSidebar({ caseCount, userEmail }: { caseCount?: number; userEmail?: string }) {
   const pathname = usePathname();
@@ -31,6 +43,8 @@ export function AppSidebar({ caseCount, userEmail }: { caseCount?: number; userE
   }
 
   const initials = userEmail ? userEmail.slice(0, 2).toUpperCase() : "TC";
+  const gitSha = process.env.NEXT_PUBLIC_GIT_SHA || "???";
+  const age = deployAge();
 
   return (
     <Sidebar side="right" collapsible="icon">
@@ -77,7 +91,10 @@ export function AppSidebar({ caseCount, userEmail }: { caseCount?: number; userE
             <DropdownMenu>
               <DropdownMenuTrigger render={<SidebarMenuButton />}>
                 <div className="w-6 h-6 rounded-full bg-primary/15 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">{initials}</div>
-                <span className="truncate text-xs">{userEmail || "Admin"}</span>
+                <div className="flex-1 min-w-0">
+                  <span className="truncate text-xs block">{userEmail || "Admin"}</span>
+                  <span className="text-[9px] text-muted-foreground font-mono">{gitSha}{age ? ` · ${age}` : ""}</span>
+                </div>
                 <ChevronUp className="mr-auto" />
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" className="w-[--radix-dropdown-menu-trigger-width]">

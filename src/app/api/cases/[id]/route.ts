@@ -9,7 +9,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const [c, msgs, ents, events, history] = await Promise.all([
     supabase.from("cases").select("*").eq("id", id).single(),
-    supabase.from("messages").select("*").eq("case_id", id).order("occurred_at"),
+    supabase.from("signals").select("*").eq("case_id", id).order("occurred_at"),
     supabase.from("case_entities").select("*, entities(*)").eq("case_id", id),
     supabase.from("case_events").select("*").eq("case_id", id).order("created_at", { ascending: false }).limit(20),
     supabase.from("audit_logs").select("*").eq("target_id", id).eq("target_type", "case").order("created_at", { ascending: false }).limit(50),

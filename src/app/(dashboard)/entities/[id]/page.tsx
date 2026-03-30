@@ -28,7 +28,7 @@ export default function EntityDetailPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [editFields, setEditFields] = useState<Record<string, string>>({});
-  const [tab, setTab] = useState<"cases" | "messages">("cases");
+  const [tab, setTab] = useState<"cases" | "signals">("cases");
 
   const load = useCallback(async () => {
     const d = await (await fetch(`/api/entities/${id}`)).json();
@@ -124,8 +124,8 @@ export default function EntityDetailPage() {
         <button onClick={() => setTab("cases")} className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${tab === "cases" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"}`}>
           Cases ({data.case_count})
         </button>
-        <button onClick={() => setTab("messages")} className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${tab === "messages" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"}`}>
-          Messages ({data.message_count})
+        <button onClick={() => setTab("signals")} className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${tab === "signals" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"}`}>
+          Signals ({data.message_count})
         </button>
       </div>
 
@@ -150,10 +150,10 @@ export default function EntityDetailPage() {
         </div>
       )}
 
-      {/* Messages tab — cross-case */}
-      {tab === "messages" && (
+      {/* Signals tab — cross-case */}
+      {tab === "signals" && (
         <div className="space-y-2">
-          {data.messages.length === 0 ? <p className="text-sm text-muted-foreground text-center py-8">No messages</p> :
+          {data.messages.length === 0 ? <p className="text-sm text-muted-foreground text-center py-8">No signals</p> :
             data.messages.map((m, i) => (
               <div key={i} className="flex gap-3 p-3 rounded-lg bg-card/50 hover:bg-card transition-colors">
                 <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">{m.sender[0]}</div>

@@ -15,7 +15,7 @@ export default function SimulatePage() {
   const [sender, setSender] = useState("");
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<{ message_id: string; case_id: string } | null>(null);
+  const [result, setResult] = useState<{ signal_id: string } | null>(null);
 
   const loadGates = useCallback(async () => {
     const data = await (await fetch(`/api/gates`)).json();
@@ -118,10 +118,10 @@ export default function SimulatePage() {
               <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300">Saved</Badge>
               <span className="text-xs text-muted-foreground">via {selectedGate?.display_name}</span>
             </div>
-            <a href={`/cases/${result.case_id}`} className="text-sm text-primary hover:underline">
-              Open Case {result.case_id.slice(0, 8)}... →
-            </a>
-            <p className="text-xs text-muted-foreground mt-1">Case is open — agent will scan on next cycle, or click &quot;Scan Now&quot; on the case.</p>
+            <p className="text-sm text-foreground/80">
+              Signal {result.signal_id.slice(0, 8)}... saved as pending
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">Signal is pending — AI will triage it on the next scan cycle and assign it to a case.</p>
           </CardContent>
         </Card>
       )}

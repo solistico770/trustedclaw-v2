@@ -22,44 +22,26 @@ export async function POST(req: NextRequest) {
     const gateId = gate?.id;
     if (!gateId) return NextResponse.json({ error: "No gate of type " + gType }, { status: 400 });
 
-    // Create case
+    // Save signal (pending, no case) — same as new ingest behavior
     const now = new Date().toISOString();
-    const { data: newCase, error: caseErr } = await db.from("cases").insert({
-      user_id: userId, status: "open", urgency: 3, importance: 3,
-      message_count: 1, first_message_at: now, last_message_at: now, next_scan_at: now,
-    }).select("id").single();
-
-    if (caseErr || !newCase) return NextResponse.json({ error: "Failed to create case" }, { status: 503 });
-
-    // Save message
-    const { data: msg, error: msgErr } = await db.from("messages").insert({
-      user_id: userId, gate_id: gateId, case_id: newCase.id,
+    const { data: signal, error: signalErr } = await db.from("signals").insert({
+      user_id: userId, gate_id: gateId, case_id: null,
+      status: "pending",
       raw_payload: { gate_type: gType, sender_name: sender_name || "Simulator", channel_name: channel_name || "Simulator", content: message_content },
       sender_identifier: sender_name || "Simulator",
       channel_identifier: channel_name || "Simulator",
       occurred_at: now, received_at: now,
     }).select("id").single();
 
-    if (msgErr || !msg) return NextResponse.json({ error: "Failed to save message" }, { status: 503 });
-
-    // Auto-link admin entity if admin gate
-    if (gate?.metadata?.is_admin_gate) {
-      const { data: settings } = await db.from("user_settings").select("admin_entity_id").eq("user_id", userId).single();
-      if (settings?.admin_entity_id) {
-        await db.from("case_entities").upsert(
-          { case_id: newCase.id, entity_id: settings.admin_entity_id, role: "primary" },
-          { onConflict: "case_id,entity_id" }
-        );
-      }
-    }
+    if (signalErr || !signal) return NextResponse.json({ error: "Failed to save signal" }, { status: 503 });
 
     await logAudit(db, {
-      user_id: userId, actor: "user", action_type: "message_simulated",
-      target_type: "message", target_id: msg.id,
+      user_id: userId, actor: "user", action_type: "signal_simulated",
+      target_type: "signal", target_id: signal.id,
       reasoning: `Simulated via ${gType}`,
     });
 
-    return NextResponse.json({ message_id: msg.id, case_id: newCase.id });
+    return NextResponse.json({ signal_id: signal.id });
   } catch (e) {
     console.error("[simulate]", e);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

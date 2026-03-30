@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase-server";
 import { logAudit } from "@/lib/audit";
 
-// Backwards-compatible: delegates to the new signals ingest logic
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -38,7 +37,7 @@ export async function POST(req: NextRequest) {
       chId = ch?.id || null;
     }
 
-    // Save as signal (pending, no case)
+    // Save signal — NO case creation. Status = pending.
     const now = new Date().toISOString();
     const { data: signal, error: signalErr } = await db.from("signals").insert({
       user_id,
@@ -60,7 +59,7 @@ export async function POST(req: NextRequest) {
     await logAudit(db, {
       user_id, actor: "system", action_type: "signal_ingested",
       target_type: "signal", target_id: signal.id,
-      reasoning: `From ${gate_type || "generic"}/${channel_name || "default"} (legacy ingest)`,
+      reasoning: `From ${gate_type || "generic"}/${channel_name || "default"}`,
     });
 
     return NextResponse.json({ signal_id: signal.id });

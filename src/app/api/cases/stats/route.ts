@@ -9,7 +9,7 @@ export async function GET() {
 
   const db = createServiceClient();
 
-  const [attentionRes, criticalRes, openRes, handledRes, entityRes, nextScanRes, scansToday, empowermentRes] = await Promise.all([
+  const [attentionRes, criticalRes, openRes, handledRes, entityRes, nextScanRes, scansToday, empowermentRes, pendingSignalsRes, overdueTasksRes] = await Promise.all([
     db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).in("status", ["action_needed", "escalated"]),
     db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).not("status", "in", '("closed","merged")').lte("urgency", 1),
     db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).in("status", ["open", "in_progress", "scheduled"]),
@@ -18,6 +18,8 @@ export async function GET() {
     db.from("cases").select("next_scan_at").eq("user_id", userId).not("status", "in", '("closed","merged")').not("next_scan_at", "is", null).order("next_scan_at", { ascending: true }).limit(1).single(),
     db.from("scan_logs").select("*", { count: "exact", head: true }).eq("user_id", userId).gte("run_at", new Date(new Date().setHours(0, 0, 0, 0)).toISOString()),
     db.from("case_events").select("empowerment_line").eq("user_id", userId).not("empowerment_line", "is", null).order("created_at", { ascending: false }).limit(1).single(),
+    db.from("signals").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "pending"),
+    db.from("tasks").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "open").lt("due_at", new Date().toISOString()),
   ]);
 
   const lastScan = await db.from("scan_logs").select("run_at").eq("user_id", userId).order("run_at", { ascending: false }).limit(1).single();
@@ -28,6 +30,8 @@ export async function GET() {
     open: openRes.count || 0,
     handled: handledRes.count || 0,
     entities: entityRes.count || 0,
+    pending_signals: pendingSignalsRes.count || 0,
+    overdue_tasks: overdueTasksRes.count || 0,
     last_scan_ago_sec: lastScan.data?.run_at ? Math.round((Date.now() - new Date(lastScan.data.run_at).getTime()) / 1000) : null,
     next_scan_in_sec: nextScanRes.data?.next_scan_at ? Math.max(0, Math.round((new Date(nextScanRes.data.next_scan_at).getTime() - Date.now()) / 1000)) : null,
     cases_scanned_today: scansToday.count || 0,

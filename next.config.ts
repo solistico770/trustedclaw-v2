@@ -11,6 +11,7 @@ const gitSha = (() => {
 const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_GIT_SHA: gitSha,
+    NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
   },
 };
 
