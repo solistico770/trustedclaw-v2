@@ -499,7 +499,7 @@ function GatesTab() {
                     <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Track:</span>
                     {[
                       { key: "track_private", label: "Private msgs", defaultVal: true },
-                      { key: "track_groups", label: "Group msgs", defaultVal: true },
+                      { key: "track_groups", label: "Group msgs", defaultVal: false },
                       { key: "track_status", label: "Status/Stories", defaultVal: false },
                     ].map(opt => {
                       const raw = meta[opt.key];

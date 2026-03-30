@@ -42,6 +42,30 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // --- Gate tracking config: filter by message type ---
+    const { data: gate } = await db.from("gates")
+      .select("metadata").eq("id", gateId).single();
+    const gm = (gate?.metadata as Record<string, string>) || {};
+    // Defaults: private=true, groups=false, status=false
+    const trackPrivate = gm.track_private !== undefined ? gm.track_private === "true" : true;
+    const trackGroups = gm.track_groups !== undefined ? gm.track_groups === "true" : false;
+    const trackStatus = gm.track_status !== undefined ? gm.track_status === "true" : false;
+
+    const channel = (body.channel_name || "").toLowerCase();
+    const isStatus = channel === "status" || channel === "stories" || channel.includes("status");
+    const isGroup = !!(body.channel_name && !isStatus && body.channel_name !== "Direct");
+    const isPrivate = !isGroup && !isStatus;
+
+    if (isStatus && !trackStatus) {
+      return NextResponse.json({ skipped: true, reason: "status tracking disabled for this gate" });
+    }
+    if (isGroup && !trackGroups) {
+      return NextResponse.json({ skipped: true, reason: "group tracking disabled for this gate" });
+    }
+    if (isPrivate && !trackPrivate) {
+      return NextResponse.json({ skipped: true, reason: "private tracking disabled for this gate" });
+    }
+
     // Dedup hash: same gate + sender + content + timestamp = same signal
     const now = new Date().toISOString();
     const signalTime = occurred_at || now;
