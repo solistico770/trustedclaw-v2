@@ -41,13 +41,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Resolve channel_id
-    let chId = channel_id || null;
-    if (!chId && channel_name) {
-      const { data: ch } = await db.from("channels")
-        .select("id").eq("user_id", user_id).eq("name", channel_name).eq("is_active", true).limit(1).single();
-      chId = ch?.id || null;
-    }
+    // channel_id — channels table is deprecated, skip lookup
+    const chId = channel_id || null;
 
     // Save signal — NO case creation. Status = pending.
     const now = new Date().toISOString();
