@@ -59,16 +59,28 @@ export async function triagePendingSignals(db: SupabaseClient, userId: string): 
       });
     }
 
-    // Get context prompt
-    const { data: settings } = await db.from("user_settings").select("context_prompt, admin_entity_id").eq("user_id", userId).single();
-    let contextPrompt = settings?.context_prompt || "You are an operational agent.";
+    // Get context prompt + identity
+    const { data: settings } = await db.from("user_settings").select("context_prompt, admin_entity_id, identity").eq("user_id", userId).single();
+    let contextPrompt = "";
+
+    const identity = (settings?.identity || {}) as Record<string, string>;
+    if (identity.name || identity.role || identity.business) {
+      const parts = [];
+      if (identity.name) parts.push(`Name: ${identity.name}`);
+      if (identity.role) parts.push(`Role: ${identity.role}`);
+      if (identity.business) parts.push(`Business: ${identity.business}`);
+      if (identity.phone) parts.push(`Phone: ${identity.phone}`);
+      contextPrompt += `WHO I AM:\n${parts.join("\n")}\n\n`;
+    }
 
     if (settings?.admin_entity_id) {
       const { data: admin } = await db.from("entities").select("canonical_name, type").eq("id", settings.admin_entity_id).single();
       if (admin) {
-        contextPrompt = `ADMIN IDENTITY: You work for "${admin.canonical_name}". All cases are managed on behalf of ${admin.canonical_name}.\n\n${contextPrompt}`;
+        contextPrompt += `ADMIN IDENTITY: "${admin.canonical_name}". All cases managed on behalf of ${admin.canonical_name}.\n\n`;
       }
     }
+
+    contextPrompt += settings?.context_prompt || "You are an operational agent.";
 
     // Build signal input for AI
     const signalInput = pendingSignals.map(s => ({
@@ -275,14 +287,38 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       timestamp: m.occurred_at,
     }));
 
-    // 3. Get context prompt + admin identity
-    const { data: settings } = await db.from("user_settings").select("context_prompt, admin_entity_id").eq("user_id", userId).single();
-    let contextPrompt = settings?.context_prompt || "You are an operational agent.";
+    // 3. Get context prompt + identity + admin entity
+    const { data: settings } = await db.from("user_settings").select("context_prompt, admin_entity_id, identity").eq("user_id", userId).single();
+    let contextPrompt = "";
+
+    // Build "who am I" from structured identity
+    const identity = (settings?.identity || {}) as Record<string, string>;
+    if (identity.name || identity.role || identity.business) {
+      const parts = [];
+      if (identity.name) parts.push(`Name: ${identity.name}`);
+      if (identity.role) parts.push(`Role: ${identity.role}`);
+      if (identity.business) parts.push(`Business: ${identity.business}`);
+      if (identity.phone) parts.push(`Phone: ${identity.phone}`);
+      if (identity.email) parts.push(`Email: ${identity.email}`);
+      if (identity.notes) parts.push(`Notes: ${identity.notes}`);
+      contextPrompt += `WHO I AM (the owner of this system):\n${parts.join("\n")}\n\n`;
+    }
 
     if (settings?.admin_entity_id) {
       const { data: admin } = await db.from("entities").select("canonical_name, type").eq("id", settings.admin_entity_id).single();
       if (admin) {
-        contextPrompt = `ADMIN IDENTITY: You work for "${admin.canonical_name}". This is the owner of the system. All cases are managed on behalf of ${admin.canonical_name}.\n\n${contextPrompt}`;
+        contextPrompt += `ADMIN IDENTITY: You work for "${admin.canonical_name}". All cases are managed on behalf of ${admin.canonical_name}.\n\n`;
+      }
+    }
+
+    contextPrompt += settings?.context_prompt || "You are an operational agent.";
+
+    // Get entity type contexts (#3 — entity group context)
+    const { data: entityTypes } = await db.from("entity_types").select("slug, display_name, context").eq("user_id", userId);
+    if (entityTypes && entityTypes.some(t => t.context)) {
+      contextPrompt += "\n\n--- ENTITY TYPE CONTEXTS ---\n";
+      for (const et of entityTypes) {
+        if (et.context) contextPrompt += `${et.display_name} (${et.slug}): ${et.context}\n`;
       }
     }
 

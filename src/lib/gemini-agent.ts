@@ -102,11 +102,15 @@ Return JSON:
   "reasoning": "overall triage summary"
 }
 
-IMPORTANT:
-- Look for patterns: multiple signals from same sender or about same topic → group them.
+IMPORTANT TRIAGE RULES:
+- A case is something IMPORTANT that a human needs to remember or act on. NOT every message is a case.
+- Group chat chatter, greetings ("hi", "thanks", emojis), memes, forwards, and casual conversation → IGNORE.
+- Only create a case when the signal contains: a request, a task, important information, a decision, a deadline, money/invoice, or something you'd want to follow up on.
+- Look for patterns: multiple signals from same sender or about same topic → group them into ONE case.
 - Check if any signal matches an existing case topic before creating a new case.
-- Only ignore signals that are genuinely noise (spam, duplicates, test messages).
+- Media signals (images, videos, audio, documents) contain only metadata descriptions — IGNORE unless the caption/description indicates something actionable.
 - Every signal_id from the input MUST appear in your decisions.
+- When in doubt, IGNORE. It's better to miss noise than to flood the owner with trivial cases.
 
 Return ONLY valid JSON.`;
 

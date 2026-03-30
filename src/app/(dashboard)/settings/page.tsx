@@ -42,40 +42,94 @@ export default function SettingsPage() {
   );
 }
 
-// ─── PROMPT TAB ───
+// ─── PROMPT TAB (Identity + Context Prompt) ───
 function PromptTab() {
   const [prompt, setPrompt] = useState("");
+  const [identity, setIdentity] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetch(`/api/settings/context-prompt`)
-      .then(r => r.json()).then(d => { setPrompt(d.context_prompt || ""); setLoading(false); });
+      .then(r => r.json()).then(d => {
+        setPrompt(d.context_prompt || "");
+        setIdentity(d.identity || {});
+        setLoading(false);
+      });
   }, []);
 
   async function save() {
     await fetch("/api/settings/context-prompt", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ context_prompt: prompt }),
+      body: JSON.stringify({ context_prompt: prompt, identity }),
     });
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   }
 
+  function setField(key: string, value: string) {
+    setIdentity(prev => ({ ...prev, [key]: value }));
+  }
+
+  if (loading) return <div className="h-48 bg-card rounded-xl animate-pulse max-w-2xl" />;
+
   return (
-    <Card className="border-border/50 max-w-2xl">
-      <CardContent className="p-5 space-y-4">
-        <div>
-          <h3 className="text-sm font-semibold mb-1">Agent Context Prompt</h3>
-          <p className="text-xs text-muted-foreground">Injected at the start of every AI scan. Tell the agent who you are, what matters, what to ignore.</p>
-        </div>
-        {loading ? <div className="h-48 bg-muted rounded-lg animate-pulse" /> :
-          <Textarea value={prompt} onChange={e => setPrompt(e.target.value)} className="min-h-[240px] font-mono text-[13px]" />}
-        <div className="flex gap-3 items-center">
-          <Button onClick={save} className="bg-primary">Save</Button>
-          {saved && <span className="text-sm text-emerald-600 dark:text-emerald-400">Saved!</span>}
-        </div>
-      </CardContent>
-    </Card>
+    <div className="space-y-4 max-w-2xl">
+      {/* WHO AM I */}
+      <Card className="border-border/50">
+        <CardContent className="p-5 space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold mb-1">Who Am I</h3>
+            <p className="text-xs text-muted-foreground">Your identity — injected into every AI call so the agent knows who it's working for.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Full Name</label>
+              <Input value={identity.name || ""} onChange={e => setField("name", e.target.value)} placeholder="Shay Cohen" className="h-9 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Role / Title</label>
+              <Input value={identity.role || ""} onChange={e => setField("role", e.target.value)} placeholder="CEO, Developer, Teacher..." className="h-9 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Business / Organization</label>
+              <Input value={identity.business || ""} onChange={e => setField("business", e.target.value)} placeholder="Kadabrix Ltd" className="h-9 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Phone</label>
+              <Input value={identity.phone || ""} onChange={e => setField("phone", e.target.value)} placeholder="+972..." className="h-9 text-sm font-mono" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Email</label>
+              <Input value={identity.email || ""} onChange={e => setField("email", e.target.value)} placeholder="you@company.com" className="h-9 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">WhatsApp Number</label>
+              <Input value={identity.whatsapp || ""} onChange={e => setField("whatsapp", e.target.value)} placeholder="+972..." className="h-9 text-sm font-mono" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">About Me / Notes</label>
+            <Textarea value={identity.notes || ""} onChange={e => setField("notes", e.target.value)} placeholder="Anything the AI should know about you..." className="text-sm min-h-[60px]" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* CONTEXT PROMPT */}
+      <Card className="border-border/50">
+        <CardContent className="p-5 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold mb-1">Agent Context Prompt</h3>
+            <p className="text-xs text-muted-foreground">Custom instructions for the AI. What to focus on, what to ignore, how to behave.</p>
+          </div>
+          <Textarea value={prompt} onChange={e => setPrompt(e.target.value)} className="min-h-[200px] font-mono text-[13px]" />
+        </CardContent>
+      </Card>
+
+      <div className="flex gap-3 items-center">
+        <Button onClick={save} className="bg-primary">Save All</Button>
+        {saved && <span className="text-sm text-emerald-600 dark:text-emerald-400">Saved!</span>}
+      </div>
+    </div>
   );
 }
 

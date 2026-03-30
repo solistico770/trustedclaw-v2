@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
   const auth = await requireAdmin();
   if (isAuthError(auth)) return auth.error;
 
-  const { slug, display_name, icon, color } = await req.json();
+  const { slug, display_name, icon, color, context } = await req.json();
   if (!slug?.trim() || !display_name?.trim()) {
     return NextResponse.json({ error: "slug and display_name required" }, { status: 400 });
   }
@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
     display_name: display_name.trim(),
     icon: icon || null,
     color: color || null,
+    context: context || null,
     is_default: false,
   }).select().single();
 
