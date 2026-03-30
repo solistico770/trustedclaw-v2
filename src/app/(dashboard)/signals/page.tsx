@@ -52,8 +52,11 @@ function senderDisplay(s: Signal) {
   const phone = p.phone;
   const name = p.sender_name || s.sender_identifier;
   if (p.direction === "outgoing") return { primary: "Me", secondary: p.chat_name || s.channel_identifier };
-  if (phone) return { primary: phone, secondary: name !== phone ? name : null };
-  return { primary: name, secondary: null };
+  // Show phone if it's a real phone number, otherwise show name
+  if (phone && phone.length >= 10 && phone.length <= 15) return { primary: `+${phone}`, secondary: name !== phone ? name : null };
+  // No real phone — show name (strip WA internal IDs from display)
+  const cleanName = name.replace(/\s*\(\d{13,}\)/, "").replace(/\d{13,}@.*$/, "").trim();
+  return { primary: cleanName || name, secondary: null };
 }
 
 export default function SignalsPage() {
