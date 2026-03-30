@@ -222,7 +222,8 @@ Examples of when to override:
 
 If you don't include set_next_scan, the system uses the default matrix.
 
-For standalone: always include set_status, set_urgency, set_importance, set_title, set_summary. Optionally set_next_scan.
+For standalone: ALWAYS include set_status, set_urgency, set_importance, set_title, set_summary, AND set_empowerment_line. Optionally set_next_scan.
+EMPOWERMENT LINE IS MANDATORY: Every scan MUST include set_empowerment_line — a short (max 100 chars) positive, empowering message about how well the owner is managing things. Make it personal and specific to the case. Hebrew is fine.
 For merge: only merge_into.
 Only propose entities that are REAL things (people, companies, projects). Don't re-propose already connected ones.
 

@@ -19,10 +19,13 @@ async function handleScan(req: NextRequest) {
   const triggeredBy = req.headers.get("x-triggered-by") || "vercel_cron";
   const scanAll = req.headers.get("x-scan-all") === "true";
 
-  // Auth check
+  // Auth check — Vercel cron sends Authorization: Bearer <CRON_SECRET>
   if (triggeredBy !== "manual") {
-    const secret = req.headers.get("x-cron-secret") || req.headers.get("authorization")?.replace("Bearer ", "");
+    const cronHeader = req.headers.get("x-cron-secret");
+    const authHeader = req.headers.get("authorization")?.replace("Bearer ", "");
+    const secret = cronHeader || authHeader;
     if (secret !== process.env.CRON_SECRET) {
+      console.error("[scan] Auth failed. triggeredBy:", triggeredBy, "has_cron_header:", !!cronHeader, "has_auth_header:", !!authHeader, "env_set:", !!process.env.CRON_SECRET);
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }
