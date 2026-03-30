@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { createBrowserClient } from "@/lib/supabase-browser";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -48,13 +48,12 @@ function DirectionBadge({ direction, isGroup }: { direction?: string; isGroup?: 
 }
 
 function senderDisplay(s: Signal) {
-  const p = s.raw_payload;
-  const phone = p.phone;
-  const name = p.sender_name || s.sender_identifier;
-  if (p.direction === "outgoing") return { primary: "Me", secondary: p.chat_name || s.channel_identifier };
-  // Show phone if it's a real phone number, otherwise show name
-  if (phone && phone.length >= 10 && phone.length <= 15) return { primary: `+${phone}`, secondary: name !== phone ? name : null };
-  // No real phone — show name (strip WA internal IDs from display)
+  const p = s.raw_payload || {};
+  const phone = typeof p.phone === "string" ? p.phone : "";
+  const name = String(p.sender_name || s.sender_identifier || "Unknown");
+  if (p.direction === "outgoing") return { primary: "Me", secondary: String(p.chat_name || s.channel_identifier || "") };
+  if (phone.length >= 10 && phone.length <= 15) return { primary: `+${phone}`, secondary: name !== phone ? name : null };
+  // Strip WA internal IDs from display
   const cleanName = name.replace(/\s*\(\d{13,}\)/, "").replace(/\d{13,}@.*$/, "").trim();
   return { primary: cleanName || name, secondary: null };
 }
@@ -71,7 +70,6 @@ export default function SignalsPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [gates, setGates] = useState<Array<{ id: string; type: string; display_name: string }>>([]);
   const router = useRouter();
-  const refreshRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   const load = useCallback(async () => {
     try {
@@ -101,12 +99,10 @@ export default function SignalsPage() {
       else if (data?.data && Array.isArray(data.data)) setGates(data.data);
     }).catch(() => {});
 
-    // Auto-refresh every 15s
-    refreshRef.current = setInterval(load, 15000);
-
+    const interval = setInterval(load, 15000);
     const sb = createBrowserClient();
     const ch = sb.channel("signals-page").on("postgres_changes", { event: "*", schema: "public", table: "signals" }, () => load()).subscribe();
-    return () => { sb.removeChannel(ch); clearInterval(refreshRef.current); };
+    return () => { sb.removeChannel(ch); clearInterval(interval); };
   }, [load]);
 
   if (loading) return <div className="space-y-3 animate-pulse">{[1,2,3].map(i => <div key={i} className="h-16 rounded-xl bg-card" />)}</div>;
