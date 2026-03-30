@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 const publicPaths = ["/login", "/auth/callback", "/waiting", "/reset-password"];
@@ -52,8 +53,13 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
-  // Check role
-  const { data: profile } = await supabase
+  // Check role using service client (bypasses RLS — proxy can't rely on anon RLS in middleware)
+  const serviceDb = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false } }
+  );
+  const { data: profile } = await serviceDb
     .from("profiles")
     .select("role")
     .eq("id", user.id)
