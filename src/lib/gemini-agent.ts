@@ -242,14 +242,21 @@ If you don't include set_next_scan, the system uses the default matrix.
 For standalone: ALWAYS include set_status, set_urgency, set_importance, set_title, set_summary, AND set_empowerment_line. Optionally set_next_scan.
 EMPOWERMENT LINE IS MANDATORY: Every scan MUST include set_empowerment_line — a short (max 100 chars) positive, empowering message about how well the owner is managing things. Make it personal and specific to the case. Hebrew is fine.
 For merge: only merge_into.
-Only propose entities that are REAL things (people, companies, projects). Don't re-propose already connected ones.
+ENTITIES — MANDATORY on every scan:
+- Extract ALL people, companies, and projects mentioned in signals.
+- For each person: include "phone" (if visible in signal), "whatsapp_number", "telegram_handle" if known.
+- Do NOT re-create entities that are already connected (listed above).
+- Use create_entity with: name, entity_type (person/company/project/other), role (primary/related/mentioned), and contact fields.
+- A "primary" entity is the main person/company the case is ABOUT.
+- A "related" entity is someone involved but not the main subject.
+- Even if you see just a name — create the entity. Contact info can be added later.
 
-TASKS: Review the open tasks list. If a task is done based on signals, close it. If new actions are needed, create tasks with clear titles and dates. Use create_task to assign actionable follow-ups.
+TASKS — Review open tasks:
+- If a task is done based on signals → close it with close_task.
+- If new follow-ups are needed → create_task with clear title and date.
+- Be specific: "Call back Ronen about invoice" not "Follow up".
 
-CRITICAL: You MUST follow skills. Every action you take must be guided by a skill.
-- Auto-attached skills are already in your context — follow them.
-- If you need a non-attached skill, pull it first with pull_skill.
-- If no skill covers what you need, explain in reasoning.
+SKILLS — If available, follow skill instructions. Auto-attached skills are already in context.
 
 Return ONLY valid JSON.`;
 
