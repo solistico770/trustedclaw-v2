@@ -1,14 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase-server";
+import { validateApiKey } from "@/lib/api-key-auth";
 import { logAudit } from "@/lib/audit";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { gate_id, gate_type, sender_name, channel_name, channel_id, content, user_id } = body;
+    const { gate_id, gate_type, sender_name, channel_name, channel_id, content } = body;
+    let { user_id } = body;
 
-    if (!content || !user_id) {
-      return NextResponse.json({ error: "content and user_id required" }, { status: 400 });
+    if (!content) {
+      return NextResponse.json({ error: "content required" }, { status: 400 });
+    }
+
+    // API key auth: override user_id from key owner (don't trust caller)
+    const apiKey = await validateApiKey(req);
+    if (apiKey) {
+      user_id = apiKey.user_id;
+    }
+
+    if (!user_id) {
+      return NextResponse.json({ error: "Unauthorized — provide API key or user_id" }, { status: 401 });
     }
 
     const db = createServiceClient();

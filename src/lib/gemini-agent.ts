@@ -10,7 +10,9 @@ export type AgentCommand =
   | { type: "set_summary"; value: string }
   | { type: "set_next_scan"; value: string }
   | { type: "set_empowerment_line"; value: string }
-  | { type: "propose_entity"; name: string; entity_type: string; role: string }
+  | { type: "create_entity"; name: string; entity_type: string; role: string; phone?: string; email?: string; whatsapp_number?: string; telegram_handle?: string }
+  | { type: "attach_entity"; entity_id?: string; name?: string; role: string }
+  | { type: "propose_entity"; name: string; entity_type: string; role: string } // backward compat
   | { type: "merge_into"; target_case_id: string; reason: string }
   | { type: "pull_skill"; skill_name: string }
   | { type: "create_task"; title: string; description?: string; scheduled_at?: string; due_at?: string }
@@ -201,7 +203,8 @@ Return JSON with:
    - {"type": "set_next_scan", "value": "ISO8601 datetime"} — OPTIONAL override of default scan schedule
    - {"type": "set_empowerment_line", "value": "short empowering message about owner's management, max 100 chars"}
    - {"type": "set_summary", "value": "1-2 sentences"}
-   - {"type": "propose_entity", "name": "name", "entity_type": "person|company|project|invoice|other", "role": "primary|related|mentioned"}
+   - {"type": "create_entity", "name": "name", "entity_type": "person|company|project|invoice|other", "role": "primary|related|mentioned", "phone": "optional", "email": "optional", "whatsapp_number": "optional", "telegram_handle": "optional"}
+   - {"type": "attach_entity", "name": "existing entity name", "role": "primary|related|mentioned"} — link an existing entity to this case (no creation)
    - {"type": "merge_into", "target_case_id": "UUID", "reason": "why"}
    - {"type": "pull_skill", "skill_name": "exact skill name"}
    - {"type": "create_task", "title": "task title", "description": "optional detail", "scheduled_at": "ISO8601 or omit", "due_at": "ISO8601 or omit"}

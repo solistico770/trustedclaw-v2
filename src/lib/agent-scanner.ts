@@ -260,7 +260,7 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
 
     // 2. Get signals (last 20) — was messages
     const { data: signals } = await db.from("signals")
-      .select("raw_payload, sender_identifier, occurred_at")
+      .select("raw_payload, sender_identifier, occurred_at, gate_id")
       .eq("case_id", caseId)
       .order("occurred_at", { ascending: true })
       .limit(20);
@@ -337,6 +337,46 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
     const { data: openTasks } = await db.from("tasks")
       .select("id, title, scheduled_at, due_at")
       .eq("case_id", caseId).eq("status", "open");
+
+    // 6.7 Optional: pull full conversation context from EC2 listener via Supabase
+    let extraConversationContext = "";
+    try {
+      const gateIdsFromSignals = [...new Set((signals || []).map(s => (s as Record<string, unknown>).gate_id).filter(Boolean))];
+      for (const gateId of gateIdsFromSignals) {
+        const { data: gate } = await db.from("gates").select("metadata").eq("id", gateId).single();
+        if (gate?.metadata?.listener_active) {
+          const { data: cmd } = await db.from("listener_commands").insert({
+            user_id: userId, command: "pull_conversations",
+            params: { since: "24h" },
+          }).select("id").single();
+          if (cmd) {
+            // Poll for response (max 10s)
+            for (let i = 0; i < 20; i++) {
+              const { data: resp } = await db.from("listener_responses")
+                .select("data").eq("command_id", cmd.id).limit(1).single();
+              if (resp?.data) {
+                const convos = (resp.data as Record<string, unknown>).conversations as Array<{ chat_name: string; messages: Array<{ sender: string; content: string; timestamp: string }> }>;
+                if (Array.isArray(convos)) {
+                  extraConversationContext = "\n\n--- FULL CONVERSATION CONTEXT (from listener) ---\n" +
+                    convos.map(c => `Chat: ${c.chat_name}\n${(c.messages || []).map(m => `  [${m.sender}]: ${m.content}`).join("\n")}`).join("\n\n");
+                }
+                break;
+              }
+              await new Promise(r => setTimeout(r, 500));
+            }
+          }
+          break; // Only pull from first active listener gate
+        }
+      }
+    } catch (err) {
+      // Graceful degradation: scan continues without extra context
+      console.warn("[scanCase] Listener pull failed (non-blocking):", err);
+    }
+
+    // Append extra context to signal list if available
+    if (extraConversationContext) {
+      sigList.push({ sender: "SYSTEM", content: extraConversationContext, timestamp: new Date().toISOString() });
+    }
 
     // 7. Call agent
     const { response, raw, tokens, durationMs, skillsPulled } = await callAgent(
@@ -478,24 +518,61 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
         case "set_empowerment_line":
           results.push({ type: "set_empowerment_line", status: "ok", detail: cmd.value.slice(0, 100) });
           break;
+        case "create_entity":
         case "propose_entity": {
+          // create_entity: creates new entity + links to case
+          // propose_entity: backward compat alias for create_entity
           const normalized = cmd.name.trim();
           if (!normalized || normalized.length < 2) {
-            results.push({ type: "propose_entity", status: "skipped", detail: "name too short" });
+            results.push({ type: cmd.type, status: "skipped", detail: "name too short" });
             break;
           }
+          // Check for existing entity (dedup by name)
           const { data: existing } = await db.from("entities")
             .select("id").eq("user_id", userId)
             .or(`canonical_name.ilike.${normalized},canonical_name.ilike.%${normalized}%`)
             .limit(1);
           if (existing && existing.length > 0) {
             await db.from("case_entities").upsert({ case_id: caseId, entity_id: existing[0].id, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
-            results.push({ type: "propose_entity", status: "linked_existing", detail: normalized });
+            results.push({ type: cmd.type, status: "linked_existing", detail: normalized });
           } else {
-            const { data: ne } = await db.from("entities").insert({ user_id: userId, type: cmd.entity_type || "other", canonical_name: normalized, status: "active" }).select("id").single();
+            // Validate entity_type against entity_types table (fallback to "other")
+            let entityType = cmd.entity_type || "other";
+            const { data: validType } = await db.from("entity_types")
+              .select("slug").eq("user_id", userId).eq("slug", entityType).limit(1).single();
+            if (!validType) entityType = "other";
+
+            const insertData: Record<string, unknown> = {
+              user_id: userId, type: entityType, canonical_name: normalized, status: "active",
+            };
+            // Add optional contact fields if provided
+            if ("phone" in cmd && cmd.phone) insertData.phone = cmd.phone;
+            if ("email" in cmd && cmd.email) insertData.email = cmd.email;
+            if ("whatsapp_number" in cmd && cmd.whatsapp_number) insertData.whatsapp_number = cmd.whatsapp_number;
+            if ("telegram_handle" in cmd && cmd.telegram_handle) insertData.telegram_handle = cmd.telegram_handle;
+
+            const { data: ne } = await db.from("entities").insert(insertData).select("id").single();
             if (ne) await db.from("case_entities").upsert({ case_id: caseId, entity_id: ne.id, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
-            results.push({ type: "propose_entity", status: "created", detail: normalized });
+            results.push({ type: cmd.type, status: "created", detail: normalized });
           }
+          break;
+        }
+        case "attach_entity": {
+          // Link an existing entity to this case — no creation
+          let entityId = cmd.entity_id;
+          if (!entityId && cmd.name) {
+            const { data: found } = await db.from("entities")
+              .select("id").eq("user_id", userId)
+              .ilike("canonical_name", cmd.name.trim())
+              .limit(1).single();
+            entityId = found?.id;
+          }
+          if (!entityId) {
+            results.push({ type: "attach_entity", status: "not_found", detail: cmd.name || cmd.entity_id || "no identifier" });
+            break;
+          }
+          await db.from("case_entities").upsert({ case_id: caseId, entity_id: entityId, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
+          results.push({ type: "attach_entity", status: "linked", detail: entityId });
           break;
         }
         case "merge_into": {

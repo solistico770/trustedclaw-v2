@@ -1,0 +1,19 @@
+import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, isAuthError } from "@/lib/require-admin";
+import { createServiceClient } from "@/lib/supabase-server";
+
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireAdmin();
+  if (isAuthError(auth)) return auth.error;
+  const { id } = await params;
+
+  const db = createServiceClient();
+  const { error } = await db
+    .from("api_keys")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("user_id", auth.user.id);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ success: true });
+}
