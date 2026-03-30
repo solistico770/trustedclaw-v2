@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "./supabase-server";
+import { createServerClient, createServiceClient } from "./supabase-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type AuthSuccess = {
@@ -20,7 +20,9 @@ export async function requireAdmin(): Promise<AuthSuccess | AuthError> {
     return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
 
-  const { data: profile } = await supabase
+  // Use service client for profile check (anon RLS can fail in some contexts)
+  const serviceDb = createServiceClient();
+  const { data: profile } = await serviceDb
     .from("profiles")
     .select("role")
     .eq("id", user.id)
