@@ -25,13 +25,13 @@ export async function triagePendingSignals(db: SupabaseClient, userId: string): 
       .select("id, raw_payload, sender_identifier, gate_id, occurred_at, gates(type)")
       .eq("user_id", userId).eq("status", "pending")
       .order("occurred_at", { ascending: true })
-      .limit(20);
+      .limit(50);
 
     if (!pendingSignals || pendingSignals.length === 0) {
       return { signals_triaged: 0, signals_assigned: 0, signals_ignored: 0, cases_created: 0, tokens: 0, duration_ms: 0, status: "skipped" };
     }
 
-    // Claim these signals (mark as 'triaging') to prevent parallel batches from grabbing the same ones
+    // Claim these signals to prevent re-processing
     const claimedIds = pendingSignals.map(s => s.id);
     await db.from("signals").update({ status: "triaging" }).in("id", claimedIds);
 

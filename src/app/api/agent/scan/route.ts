@@ -3,159 +3,125 @@ import { createServiceClient } from "@/lib/supabase-server";
 import { scanCase, triagePendingSignals, ScanCaseResult, TriageResult } from "@/lib/agent-scanner";
 
 // Vercel Cron sends GET
-export async function GET(req: NextRequest) {
-  return handleScan(req);
-}
-
-export async function POST(req: NextRequest) {
-  return handleScan(req);
-}
+export async function GET(req: NextRequest) { return handleScan(req); }
+export async function POST(req: NextRequest) { return handleScan(req); }
 
 const MAX_RUNTIME_MS = 55_000;
-const TRIAGE_BATCH_SIZE = 20;
-const TRIAGE_PARALLEL = 5; // fire up to 5 triage calls in parallel
-const CASE_PARALLEL = 3;   // scan up to 3 cases in parallel
+
+// Simple lock — prevents overlapping scans within the same instance
+let scanRunning = false;
 
 async function handleScan(req: NextRequest) {
   const startTime = Date.now();
   const triggeredBy = req.headers.get("x-triggered-by") || "vercel_cron";
   const scanAll = req.headers.get("x-scan-all") === "true";
 
-  // Auth check — Vercel cron sends Authorization: Bearer <CRON_SECRET>
+  // Auth
   if (triggeredBy !== "manual") {
     const cronHeader = req.headers.get("x-cron-secret");
     const authHeader = req.headers.get("authorization")?.replace("Bearer ", "");
     const secret = cronHeader || authHeader;
     if (secret !== process.env.CRON_SECRET) {
-      console.error("[scan] Auth failed. triggeredBy:", triggeredBy, "has_cron_header:", !!cronHeader, "has_auth_header:", !!authHeader, "env_set:", !!process.env.CRON_SECRET);
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }
 
-  const db = createServiceClient();
-
-  // Determine user_id
-  const { data: anySignal } = await db.from("signals").select("user_id").eq("status", "pending").limit(1).single();
-  const { data: anyCase } = await db.from("cases").select("user_id").not("status", "in", '("closed","merged")').limit(1).single();
-  const userId = anySignal?.user_id || anyCase?.user_id;
-
-  if (!userId) {
-    return NextResponse.json({ message: "No pending signals or open cases", cases_scanned: 0 });
+  // Guard: skip if already running
+  if (scanRunning) {
+    return NextResponse.json({ message: "Scan already running, skipping", skipped: true });
   }
+  scanRunning = true;
 
-  // ─── PASS 1: PARALLEL Signal Triage ─────────────────────────────────────
-  // Count pending signals and fire parallel triage batches
-  const { count: pendingCount } = await db.from("signals")
-    .select("*", { count: "exact", head: true })
-    .eq("user_id", userId).eq("status", "pending");
+  try {
+    const db = createServiceClient();
 
-  const batchCount = Math.min(TRIAGE_PARALLEL, Math.ceil((pendingCount || 0) / TRIAGE_BATCH_SIZE));
+    const { data: anySignal } = await db.from("signals").select("user_id").eq("status", "pending").limit(1).single();
+    const { data: anyCase } = await db.from("cases").select("user_id").not("status", "in", '("closed","merged")').limit(1).single();
+    const userId = anySignal?.user_id || anyCase?.user_id;
 
-  let triageResult: TriageResult = {
-    signals_triaged: 0, signals_assigned: 0, signals_ignored: 0,
-    cases_created: 0, tokens: 0, duration_ms: 0, status: "skipped",
-  };
-
-  if (batchCount > 0) {
-    // Fire parallel triage calls — each picks up a batch of pending signals
-    // triagePendingSignals uses LIMIT 20 and processes whatever is pending
-    const triagePromises = Array.from({ length: batchCount }, () =>
-      triagePendingSignals(db, userId).catch(err => {
-        console.error("[scan] Triage batch failed:", err);
-        return { signals_triaged: 0, signals_assigned: 0, signals_ignored: 0, cases_created: 0, tokens: 0, duration_ms: 0, status: "failed" as const, error: String(err) };
-      })
-    );
-
-    const triageResults = await Promise.all(triagePromises);
-
-    // Merge triage results
-    triageResult = {
-      signals_triaged: triageResults.reduce((s, r) => s + r.signals_triaged, 0),
-      signals_assigned: triageResults.reduce((s, r) => s + r.signals_assigned, 0),
-      signals_ignored: triageResults.reduce((s, r) => s + r.signals_ignored, 0),
-      cases_created: triageResults.reduce((s, r) => s + r.cases_created, 0),
-      tokens: triageResults.reduce((s, r) => s + r.tokens, 0),
-      duration_ms: Math.max(...triageResults.map(r => r.duration_ms)),
-      status: triageResults.some(r => r.status === "failed") ? "failed" : "success",
-    };
-  }
-
-  // ─── PASS 2: PARALLEL Case Review ───────────────────────────────────────
-  const allResults: ScanCaseResult[] = [];
-  let casesMerged = 0;
-  let cycles = 0;
-
-  while (Date.now() - startTime < MAX_RUNTIME_MS) {
-    cycles++;
-
-    let casesToScan;
-    if (scanAll && cycles === 1) {
-      const { data } = await db.from("cases").select("id, user_id, status, importance")
-        .not("status", "in", '("closed","merged")').order("importance", { ascending: false }).limit(20);
-      casesToScan = data;
-    } else {
-      const { data } = await db.from("cases").select("id, user_id, status, importance")
-        .not("status", "in", '("closed","merged")')
-        .lte("next_scan_at", new Date().toISOString())
-        .order("importance", { ascending: false }).limit(CASE_PARALLEL);
-      casesToScan = data;
+    if (!userId) {
+      return NextResponse.json({ message: "No work", signals_triaged: 0, cases_scanned: 0 });
     }
 
-    if (!casesToScan || casesToScan.length === 0) break;
+    // ─── TRIAGE LOOP: keep triaging until no more pending signals or time runs out ───
+    let totalTriaged = 0, totalAssigned = 0, totalIgnored = 0, totalCasesCreated = 0, totalTriageTokens = 0;
 
-    // Scan cases in parallel
-    const casePromises = casesToScan.map(c =>
-      scanCase(db, c.id, c.user_id, triggeredBy).catch(err => ({
-        case_id: c.id, decision: "error", reasoning: String(err),
-        commands_count: 0, commands_executed: [], skills_pulled: [],
-        tokens: 0, duration_ms: 0, status: "failed" as const, error: String(err),
-      }))
-    );
+    while (Date.now() - startTime < MAX_RUNTIME_MS - 10_000) {
+      const { count } = await db.from("signals").select("*", { count: "exact", head: true })
+        .eq("user_id", userId).eq("status", "pending");
 
-    const batchResults = await Promise.all(casePromises);
-    for (const result of batchResults) {
-      allResults.push(result);
-      if (result.decision === "merge") casesMerged++;
+      if (!count || count === 0) break;
+
+      const triageResult = await triagePendingSignals(db, userId);
+      totalTriaged += triageResult.signals_triaged;
+      totalAssigned += triageResult.signals_assigned;
+      totalIgnored += triageResult.signals_ignored;
+      totalCasesCreated += triageResult.cases_created;
+      totalTriageTokens += triageResult.tokens;
+
+      if (triageResult.signals_triaged === 0) break; // nothing processed = stop
     }
 
-    if (scanAll && cycles === 1) continue;
-    if (Date.now() - startTime + 3000 >= MAX_RUNTIME_MS) break;
+    // ─── CASE REVIEW: scan due cases ─────────────────────────────────────────
+    const allResults: ScanCaseResult[] = [];
+    let casesMerged = 0;
+
+    while (Date.now() - startTime < MAX_RUNTIME_MS) {
+      let casesToScan;
+      if (scanAll && allResults.length === 0) {
+        const { data } = await db.from("cases").select("id, user_id, status, importance")
+          .not("status", "in", '("closed","merged")').order("importance", { ascending: false }).limit(10);
+        casesToScan = data;
+      } else {
+        const { data } = await db.from("cases").select("id, user_id, status, importance")
+          .not("status", "in", '("closed","merged")')
+          .lte("next_scan_at", new Date().toISOString())
+          .order("importance", { ascending: false }).limit(3);
+        casesToScan = data;
+      }
+
+      if (!casesToScan || casesToScan.length === 0) break;
+
+      for (const c of casesToScan) {
+        if (Date.now() - startTime > MAX_RUNTIME_MS) break;
+        const result = await scanCase(db, c.id, c.user_id, triggeredBy);
+        allResults.push(result);
+        if (result.decision === "merge") casesMerged++;
+      }
+
+      if (Date.now() - startTime + 5000 >= MAX_RUNTIME_MS) break;
+    }
+
+    const durationMs = Date.now() - startTime;
+
+    // Save scan log
+    await db.from("scan_logs").insert({
+      user_id: userId,
+      triggered_by: triggeredBy as "pg_cron" | "vercel_cron" | "manual",
+      cases_scanned: allResults.length,
+      cases_merged: casesMerged,
+      signals_triaged: totalTriaged,
+      signals_assigned: totalAssigned,
+      signals_ignored: totalIgnored,
+      cases_created_from_triage: totalCasesCreated,
+      duration_ms: durationMs,
+      status: allResults.some(r => r.status === "failed") ? "partial_failure" : "success",
+      error_message: allResults.filter(r => r.error).map(r => `${r.case_id.slice(0, 8)}: ${r.error}`).join("; ") || null,
+      case_results: allResults,
+    });
+
+    return NextResponse.json({
+      signals_triaged: totalTriaged,
+      signals_assigned: totalAssigned,
+      signals_ignored: totalIgnored,
+      cases_created: totalCasesCreated,
+      cases_scanned: allResults.length,
+      cases_merged: casesMerged,
+      triage_tokens: totalTriageTokens,
+      duration_ms: durationMs,
+      mode: scanAll ? "all_open" : "due_only",
+    });
+  } finally {
+    scanRunning = false;
   }
-
-  const durationMs = Date.now() - startTime;
-
-  // Save scan log with triage stats
-  await db.from("scan_logs").insert({
-    user_id: userId,
-    triggered_by: triggeredBy as "pg_cron" | "vercel_cron" | "manual",
-    cases_scanned: allResults.length,
-    cases_merged: casesMerged,
-    signals_triaged: triageResult.signals_triaged,
-    signals_assigned: triageResult.signals_assigned,
-    signals_ignored: triageResult.signals_ignored,
-    cases_created_from_triage: triageResult.cases_created,
-    duration_ms: durationMs,
-    status: allResults.some(r => r.status === "failed") || triageResult.status === "failed" ? "partial_failure" : "success",
-    error_message: [
-      ...allResults.filter(r => r.error).map(r => `${r.case_id.slice(0, 8)}: ${r.error}`),
-      ...(triageResult.error ? [`triage: ${triageResult.error}`] : []),
-    ].join("; ") || null,
-    case_results: allResults,
-  });
-
-  return NextResponse.json({
-    triage: {
-      signals_triaged: triageResult.signals_triaged,
-      signals_assigned: triageResult.signals_assigned,
-      signals_ignored: triageResult.signals_ignored,
-      cases_created: triageResult.cases_created,
-      status: triageResult.status,
-    },
-    cases_scanned: allResults.length,
-    cases_merged: casesMerged,
-    duration_ms: durationMs,
-    cycles,
-    mode: scanAll ? "all_open" : "due_only",
-    results: allResults,
-  });
 }
