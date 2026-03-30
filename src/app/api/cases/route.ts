@@ -15,8 +15,10 @@ export async function GET(req: NextRequest) {
     .eq("user_id", user.id);
 
   const status = sp.get("status");
+  const filter = sp.get("filter");
   if (status) query = query.in("status", status.split(","));
   else query = query.not("status", "in", '("closed","merged")');
+  if (filter === "critical") query = query.lte("urgency", 1);
 
   const sortBy = sp.get("sort_by") || "importance";
   if (sortBy === "importance") query = query.order("importance", { ascending: false });

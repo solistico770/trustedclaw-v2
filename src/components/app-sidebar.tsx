@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase-browser";
-import { ClipboardList, Users, FlaskConical, Cpu, Settings, LogOut, ChevronUp, UserCog, Radio, CheckSquare } from "lucide-react";
+import { LayoutDashboard, ClipboardList, Users, FlaskConical, Cpu, Settings, LogOut, ChevronUp, UserCog, Radio, CheckSquare } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
@@ -12,7 +12,8 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 const nav = [
-  { href: "/", label: "Cases", icon: ClipboardList },
+  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/cases", label: "Cases", icon: ClipboardList },
   { href: "/signals", label: "Signals", icon: Radio },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/entities", label: "Entities", icon: Users },
@@ -74,7 +75,7 @@ export function AppSidebar({ caseCount, userEmail }: { caseCount?: number; userE
                       <item.icon />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
-                    {item.href === "/" && caseCount ? (
+                    {item.href === "/cases" && caseCount ? (
                       <SidebarMenuBadge>{caseCount}</SidebarMenuBadge>
                     ) : null}
                   </SidebarMenuItem>
