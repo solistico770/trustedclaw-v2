@@ -178,16 +178,56 @@ async function executeTriageDecisions(
         if (decision.group_key && groupCases.has(decision.group_key)) {
           caseId = groupCases.get(decision.group_key)!;
         } else {
-          // Create new case
+          // Create new case WITH metadata from AI
           const now = new Date().toISOString();
           const { data: newCase } = await db.from("cases").insert({
-            user_id: userId, status: "open", urgency: 3, importance: 3,
-            message_count: 1, first_message_at: now, last_message_at: now, next_scan_at: now,
+            user_id: userId,
+            status: "open",
+            title: decision.title || null,
+            summary: decision.summary || null,
+            urgency: decision.urgency || 3,
+            importance: decision.importance || 3,
+            message_count: 1,
+            first_message_at: now,
+            last_message_at: now,
+            next_scan_at: now,
           }).select("id").single();
           caseId = newCase?.id || null;
           if (caseId) {
             casesCreated++;
             if (decision.group_key) groupCases.set(decision.group_key, caseId);
+
+            // Create entities from triage
+            if (decision.entities && Array.isArray(decision.entities)) {
+              for (const ent of decision.entities) {
+                if (!ent.name || ent.name.length < 2) continue;
+                try {
+                  // Check if entity already exists
+                  const { data: existing } = await db.from("entities")
+                    .select("id").eq("user_id", userId).ilike("canonical_name", ent.name).limit(1).single();
+                  if (existing) {
+                    await db.from("case_entities").upsert(
+                      { case_id: caseId, entity_id: existing.id, role: ent.role || "mentioned" },
+                      { onConflict: "case_id,entity_id" }
+                    );
+                  } else {
+                    const { data: newEnt } = await db.from("entities").insert({
+                      user_id: userId,
+                      type: ent.type || "person",
+                      canonical_name: ent.name,
+                      status: "active",
+                      phone: ent.phone || null,
+                    }).select("id").single();
+                    if (newEnt) {
+                      await db.from("case_entities").upsert(
+                        { case_id: caseId, entity_id: newEnt.id, role: ent.role || "mentioned" },
+                        { onConflict: "case_id,entity_id" }
+                      );
+                    }
+                  }
+                } catch { /* entity creation is best-effort */ }
+              }
+            }
 
             // Auto-link admin entity if applicable
             if (adminEntityId) {

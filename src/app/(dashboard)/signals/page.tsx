@@ -163,7 +163,7 @@ export default function SignalsPage() {
       {/* Signal list */}
       <div className="space-y-2">
         {signals.map(s => {
-          const st = STATUS_STYLE[s.status];
+          const st = STATUS_STYLE[s.status] || { color: "bg-zinc-100 text-zinc-600 dark:bg-zinc-500/15 dark:text-zinc-400", label: s.status || "Unknown" };
           const isExpanded = expanded === s.id;
           const sender = senderDisplay(s);
           const p = s.raw_payload;

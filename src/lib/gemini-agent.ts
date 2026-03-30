@@ -38,6 +38,11 @@ export type TriageDecision = {
   action: "assign" | "create_case" | "ignore";
   case_id?: string;
   group_key?: string;
+  title?: string;
+  summary?: string;
+  urgency?: number;
+  importance?: number;
+  entities?: Array<{ name: string; type: string; role: string; phone?: string }>;
   reasoning: string;
 };
 
@@ -75,8 +80,7 @@ export async function triageSignals(
 ---
 SIGNAL TRIAGE MODE
 
-You have ${signals.length} new pending signals that need to be triaged.
-Your job: decide what happens to each signal.
+You have ${signals.length} new pending signals to triage.
 
 PENDING SIGNALS:
 ${signalsText}
@@ -85,32 +89,38 @@ EXISTING OPEN CASES:
 ${casesText}
 
 ---
-INSTRUCTIONS:
-For each signal, decide ONE of:
-1. "assign" — this signal belongs to an existing case. Provide the case_id.
-2. "create_case" — this signal represents something new. A new case will be created.
-   If multiple signals should go into the SAME new case, give them the same "group_key" string.
-3. "ignore" — this signal is noise, spam, or not actionable. It will be discarded.
+For each signal, decide ONE action:
+
+1. "assign" — signal belongs to an existing case. Include "case_id".
+2. "create_case" — new topic that needs tracking. MUST include:
+   - "title": clear Hebrew/English title (what is this about)
+   - "summary": 1-2 sentence description
+   - "urgency": 1-5 (1=immediate action needed, 5=routine)
+   - "importance": 1-5 (1=critical business impact, 5=minimal)
+   - "entities": array of people/companies mentioned: [{"name":"שם","type":"person","role":"primary","phone":"972..."}]
+   - "group_key": if multiple signals belong to same new case, use same group_key
+3. "ignore" — ONLY for: spam, bot messages, empty forwards, system notifications, or pure emoji/sticker messages.
 
 Return JSON:
 {
   "decisions": [
     { "signal_id": "<uuid>", "action": "assign", "case_id": "<uuid>", "reasoning": "..." },
-    { "signal_id": "<uuid>", "action": "create_case", "group_key": "new-invoice-issue", "reasoning": "..." },
+    { "signal_id": "<uuid>", "action": "create_case", "group_key": "topic-key", "title": "כותרת", "summary": "תיאור", "urgency": 3, "importance": 3, "entities": [{"name":"שם","type":"person","role":"primary"}], "reasoning": "..." },
     { "signal_id": "<uuid>", "action": "ignore", "reasoning": "..." }
   ],
-  "reasoning": "overall triage summary"
+  "reasoning": "overall summary"
 }
 
-IMPORTANT TRIAGE RULES:
-- A case is something IMPORTANT that a human needs to remember or act on. NOT every message is a case.
-- Group chat chatter, greetings ("hi", "thanks", emojis), memes, forwards, and casual conversation → IGNORE.
-- Only create a case when the signal contains: a request, a task, important information, a decision, a deadline, money/invoice, or something you'd want to follow up on.
-- Look for patterns: multiple signals from same sender or about same topic → group them into ONE case.
-- Check if any signal matches an existing case topic before creating a new case.
-- Media signals (images, videos, audio, documents) contain only metadata descriptions — IGNORE unless the caption/description indicates something actionable.
-- Every signal_id from the input MUST appear in your decisions.
-- When in doubt, IGNORE. It's better to miss noise than to flood the owner with trivial cases.
+TRIAGE RULES:
+- EVERY conversation that involves a real person talking about something real → create_case or assign.
+- A case = any topic worth remembering: a request, info, question, update, payment, delivery, meeting, complaint, etc.
+- Group signals from the SAME sender or SAME topic into ONE case using group_key.
+- Check existing cases before creating new ones — assign if the topic matches.
+- Extract entities (people, companies, projects) with whatever contact info is available (phone, WA number, name).
+- Direction "ME→" means the owner sent it — still relevant, assign or create case if it's about something.
+- ONLY ignore actual noise: automated notifications, empty messages, pure emojis, spam, bot messages.
+- When in doubt, CREATE A CASE — it's better to track than to miss.
+- Every signal_id MUST appear in decisions.
 
 Return ONLY valid JSON.`;
 
