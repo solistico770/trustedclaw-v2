@@ -493,6 +493,33 @@ function GatesTab() {
 
                 {error && <p className="text-xs text-red-500">{error}</p>}
 
+                {/* Tracking config for WA/TG gates */}
+                {isLive && (
+                  <div className="flex gap-4 items-center pt-1 border-t border-border/30">
+                    <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Track:</span>
+                    {[
+                      { key: "track_private", label: "Private msgs", defaultVal: true },
+                      { key: "track_groups", label: "Group msgs", defaultVal: true },
+                      { key: "track_status", label: "Status/Stories", defaultVal: false },
+                    ].map(opt => {
+                      const raw = meta[opt.key];
+                      const val = raw !== undefined ? raw === "true" : opt.defaultVal;
+                      return (
+                        <label key={opt.key} className="flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={val as boolean} onChange={async () => {
+                            await fetch(`/api/gates/${g.id}`, {
+                              method: "PATCH", headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ metadata: { ...meta, [opt.key]: !val } }),
+                            });
+                            load();
+                          }} className="w-3.5 h-3.5 rounded accent-primary" />
+                          <span className="text-[11px] text-muted-foreground">{opt.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Actions for live gates */}
                 {isLive && (
                   <div className="flex gap-2 pt-1">
