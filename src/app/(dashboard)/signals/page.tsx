@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { createBrowserClient } from "@/lib/supabase-browser";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,11 @@ type Signal = {
   id: string;
   gate_id: string;
   case_id: string | null;
-  raw_payload: { content?: string; sender_name?: string; gate_type?: string };
+  raw_payload: {
+    content?: string; sender_name?: string; gate_type?: string;
+    phone?: string; direction?: "incoming" | "outgoing";
+    is_group?: boolean; chat_name?: string; media_type?: string | null;
+  };
   sender_identifier: string;
   channel_identifier: string;
   status: "pending" | "processed" | "ignored";
@@ -28,15 +32,35 @@ const STATUS_STYLE: Record<string, { color: string; label: string }> = {
 };
 
 function timeAgo(iso: string) {
-  const h = Math.round((Date.now() - new Date(iso).getTime()) / 3600000);
-  if (h < 1) return `${Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000))}m ago`;
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.round(h / 24)}d ago`;
 }
 
+function DirectionBadge({ direction, isGroup }: { direction?: string; isGroup?: boolean }) {
+  if (direction === "outgoing") return <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400">ME→</span>;
+  if (isGroup) return <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-400">GRP→</span>;
+  return <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">→ME</span>;
+}
+
+function senderDisplay(s: Signal) {
+  const p = s.raw_payload;
+  const phone = p.phone;
+  const name = p.sender_name || s.sender_identifier;
+  if (p.direction === "outgoing") return { primary: "Me", secondary: p.chat_name || s.channel_identifier };
+  if (phone) return { primary: phone, secondary: name !== phone ? name : null };
+  return { primary: name, secondary: null };
+}
+
 export default function SignalsPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [gateFilter, setGateFilter] = useState("");
   const [assignedFilter, setAssignedFilter] = useState("");
@@ -44,35 +68,58 @@ export default function SignalsPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [gates, setGates] = useState<Array<{ id: string; type: string; display_name: string }>>([]);
   const router = useRouter();
+  const refreshRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   const load = useCallback(async () => {
-    const params = new URLSearchParams();
-    if (statusFilter) params.set("status", statusFilter);
-    if (gateFilter) params.set("gate_id", gateFilter);
-    if (assignedFilter) params.set("assigned", assignedFilter);
-    if (search) params.set("search", search);
-    const res = await fetch(`/api/signals?${params}`);
-    const data = await res.json();
-    if (data.signals) setSignals(data.signals);
-    setLoading(false);
+    try {
+      const params = new URLSearchParams();
+      if (statusFilter) params.set("status", statusFilter);
+      if (gateFilter) params.set("gate_id", gateFilter);
+      if (assignedFilter) params.set("assigned", assignedFilter);
+      if (search) params.set("search", search);
+      params.set("limit", "200");
+      const res = await fetch(`/api/signals?${params}`);
+      if (!res.ok) { setError(`API error: ${res.status}`); return; }
+      const data = await res.json();
+      setSignals(data.signals || []);
+      setTotal(data.total || 0);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
   }, [statusFilter, gateFilter, assignedFilter, search]);
 
   useEffect(() => {
     load();
-    // Load gates for filter
     fetch("/api/gates").then(r => r.json()).then(data => {
       if (Array.isArray(data)) setGates(data);
-    });
+      else if (data?.data && Array.isArray(data.data)) setGates(data.data);
+    }).catch(() => {});
+
+    // Auto-refresh every 15s
+    refreshRef.current = setInterval(load, 15000);
+
     const sb = createBrowserClient();
     const ch = sb.channel("signals-page").on("postgres_changes", { event: "*", schema: "public", table: "signals" }, () => load()).subscribe();
-    return () => { sb.removeChannel(ch); };
+    return () => { sb.removeChannel(ch); clearInterval(refreshRef.current); };
   }, [load]);
 
   if (loading) return <div className="space-y-3 animate-pulse">{[1,2,3].map(i => <div key={i} className="h-16 rounded-xl bg-card" />)}</div>;
 
+  if (error) return (
+    <div className="text-center py-12">
+      <p className="text-lg font-medium text-destructive">Failed to load signals</p>
+      <p className="text-sm text-muted-foreground mt-1">{error}</p>
+      <button onClick={() => { setError(null); setLoading(true); load(); }} className="mt-3 text-primary hover:underline text-sm">Retry</button>
+    </div>
+  );
+
   const counts = {
-    total: signals.length,
+    total: total,
     pending: signals.filter(s => s.status === "pending").length,
+    last24h: signals.filter(s => Date.now() - new Date(s.occurred_at).getTime() < 86400000).length,
   };
 
   return (
@@ -80,13 +127,16 @@ export default function SignalsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-foreground">Signals</h1>
-          <p className="text-sm text-muted-foreground">{counts.total} signals{counts.pending > 0 ? ` · ${counts.pending} pending` : ""}</p>
+          <p className="text-sm text-muted-foreground">
+            {counts.total} total · {counts.pending} pending · {counts.last24h} in last 24h
+            <span className="ml-2 text-[10px] text-emerald-500">● live</span>
+          </p>
         </div>
       </div>
 
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
-        <Input placeholder="Search content, sender..." value={search} onChange={e => setSearch(e.target.value)} className="max-w-xs h-9 text-sm" />
+        <Input placeholder="Search content, sender, phone..." value={search} onChange={e => setSearch(e.target.value)} className="max-w-xs h-9 text-sm" />
         <select className="h-9 bg-input border border-border rounded-lg px-3 text-sm text-foreground" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           <option value="">All Status</option>
           <option value="pending">Pending</option>
@@ -116,20 +166,21 @@ export default function SignalsPage() {
         {signals.map(s => {
           const st = STATUS_STYLE[s.status];
           const isExpanded = expanded === s.id;
+          const sender = senderDisplay(s);
+          const p = s.raw_payload;
           return (
             <Card key={s.id} className="border-border/50 hover:border-primary/40 transition-all">
               <CardContent className="px-4 py-3">
                 <div className="flex items-center gap-3 cursor-pointer" onClick={() => setExpanded(isExpanded ? null : s.id)}>
-                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
-                    {(s.sender_identifier || "?")[0]}
-                  </div>
+                  <DirectionBadge direction={p.direction} isGroup={p.is_group} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-foreground/90">{s.sender_identifier}</span>
+                      <span className="text-sm font-semibold text-foreground/90 font-mono">{sender.primary}</span>
+                      {sender.secondary && <span className="text-xs text-muted-foreground">{sender.secondary}</span>}
                       <Badge className={`text-[10px] ${st.color}`}>{st.label}</Badge>
-                      <span className="text-[10px] text-muted-foreground">{s.gates?.type || "unknown"}</span>
+                      {p.is_group && <span className="text-[10px] text-violet-500">{p.chat_name}</span>}
                     </div>
-                    <p className="text-xs text-muted-foreground truncate mt-0.5">{s.raw_payload?.content?.slice(0, 100)}</p>
+                    <p className="text-xs text-muted-foreground truncate mt-0.5">{p.content?.slice(0, 120)}</p>
                   </div>
                   {s.cases && (
                     <button
@@ -139,14 +190,14 @@ export default function SignalsPage() {
                       #{s.cases.case_number}
                     </button>
                   )}
-                  <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(s.received_at)}</span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(s.occurred_at)}</span>
                 </div>
 
                 {isExpanded && (
                   <div className="mt-3 pt-3 border-t border-border/50 space-y-2">
                     <div className="bg-muted/30 rounded-lg p-3">
                       <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">Full Content</p>
-                      <p className="text-sm text-foreground/90 whitespace-pre-wrap">{s.raw_payload?.content}</p>
+                      <p className="text-sm text-foreground/90 whitespace-pre-wrap">{p.content}</p>
                     </div>
                     {s.processing_decision?.reasoning && (
                       <div className="bg-muted/30 rounded-lg p-3">
@@ -154,10 +205,15 @@ export default function SignalsPage() {
                         <p className="text-sm text-foreground/80">{s.processing_decision.reasoning}</p>
                       </div>
                     )}
-                    <div className="flex gap-4 text-xs text-muted-foreground">
-                      <span>Gate: {s.gates?.display_name || s.gates?.type}</span>
-                      <span>Channel: {s.channel_identifier}</span>
-                      <span>Received: {new Date(s.received_at).toLocaleString("he-IL")}</span>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-muted-foreground bg-muted/20 rounded-lg p-3">
+                      {p.phone && <div><span className="text-[10px] uppercase text-muted-foreground/60">Phone</span><br /><span className="font-mono">{p.phone}</span></div>}
+                      <div><span className="text-[10px] uppercase text-muted-foreground/60">Direction</span><br />{p.direction === "outgoing" ? "Me → Them" : "Them → Me"}</div>
+                      <div><span className="text-[10px] uppercase text-muted-foreground/60">Type</span><br />{p.is_group ? "Group" : "Conversation"}</div>
+                      <div><span className="text-[10px] uppercase text-muted-foreground/60">Gate</span><br />{s.gates?.display_name || s.gates?.type}</div>
+                      <div><span className="text-[10px] uppercase text-muted-foreground/60">Channel</span><br />{s.channel_identifier}</div>
+                      <div><span className="text-[10px] uppercase text-muted-foreground/60">Occurred</span><br />{new Date(s.occurred_at).toLocaleString("he-IL")}</div>
+                      <div><span className="text-[10px] uppercase text-muted-foreground/60">Received</span><br />{new Date(s.received_at).toLocaleString("he-IL")}</div>
+                      {p.media_type && <div><span className="text-[10px] uppercase text-muted-foreground/60">Media</span><br />{p.media_type}</div>}
                     </div>
                   </div>
                 )}

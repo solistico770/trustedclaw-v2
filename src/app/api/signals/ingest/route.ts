@@ -7,7 +7,7 @@ import { createHash } from "crypto";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { gate_id, gate_type, sender_name, content, occurred_at } = body;
+    const { gate_id, gate_type, sender_name, content, occurred_at, metadata } = body;
     let { user_id } = body;
 
     if (!content) {
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
       case_id: null,
       status: "pending",
       dedup_hash: dedupHash,
-      raw_payload: { gate_type: gate_type || "generic", sender_name, content },
+      raw_payload: { gate_type: gate_type || "generic", sender_name, content, ...(metadata || {}) },
       sender_identifier: sender_name || "Unknown",
       channel_identifier: body.channel_name || "Default",
       occurred_at: signalTime,

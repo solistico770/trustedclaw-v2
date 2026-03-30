@@ -16,7 +16,7 @@ type Case = {
 
 type Stats = {
   attention: number; critical: number; open: number; handled: number; entities: number;
-  pending_signals: number; overdue_tasks: number;
+  pending_signals: number; signals_24h: number; signals_total: number; overdue_tasks: number;
   last_scan_ago_sec: number | null; next_scan_in_sec: number | null; cases_scanned_today: number;
   latest_empowerment: string | null;
 };
@@ -80,9 +80,14 @@ export default function CasesBoard() {
 
   useEffect(() => {
     load();
+    // Auto-refresh every 30s
+    const interval = setInterval(load, 30000);
     const sb = createBrowserClient();
-    const ch = sb.channel("board").on("postgres_changes", { event: "*", schema: "public", table: "cases" }, () => load()).subscribe();
-    return () => { sb.removeChannel(ch); };
+    const ch = sb.channel("board")
+      .on("postgres_changes", { event: "*", schema: "public", table: "cases" }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "signals" }, () => load())
+      .subscribe();
+    return () => { sb.removeChannel(ch); clearInterval(interval); };
   }, [load]);
 
   function clickDashStat(filterValue: string | null) {
@@ -118,6 +123,7 @@ export default function CasesBoard() {
 
   const dashStats = [
     { key: "pending_signals", label: "Pending", value: stats?.pending_signals || 0, color: (stats?.pending_signals || 0) > 0 ? "text-amber-600 dark:text-amber-400" : "text-foreground/30", icon: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" },
+    { key: "signals_24h", label: "24h Signals", value: stats?.signals_24h || 0, color: (stats?.signals_24h || 0) > 0 ? "text-cyan-600 dark:text-cyan-400" : "text-foreground/30", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
     { key: "action_needed,escalated", label: "Attention", value: stats?.attention || 0, color: (stats?.attention || 0) > 0 ? "text-red-600 dark:text-red-400" : "text-foreground/30", icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.962-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" },
     { key: "critical", label: "Critical", value: stats?.critical || 0, color: (stats?.critical || 0) > 0 ? "text-red-600 dark:text-red-400" : "text-foreground/30", icon: "M13 10V3L4 14h7v7l9-11h-7z" },
     { key: "open,in_progress,scheduled", label: "Open", value: stats?.open || 0, color: "text-blue-600 dark:text-blue-400", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
@@ -136,7 +142,7 @@ export default function CasesBoard() {
       )}
 
       {/* Dashboard stats — clickable */}
-      <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+      <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
         {dashStats.map(s => {
           const active = dashFilter === s.key;
           return (
@@ -156,9 +162,11 @@ export default function CasesBoard() {
 
       {/* System status bar */}
       <div className="flex items-center gap-4 text-xs text-muted-foreground px-1">
+        <span className="text-emerald-500">● live</span>
         <span>Last scan: {stats?.last_scan_ago_sec != null ? fmtSec(stats.last_scan_ago_sec) + " ago" : "—"}</span>
         <span>{stats?.cases_scanned_today || 0} scans today</span>
         <span>Next: {stats?.next_scan_in_sec != null ? fmtSec(stats.next_scan_in_sec) : "—"}</span>
+        <span>{stats?.signals_total || 0} signals total</span>
         {dashFilter && <button onClick={() => setDashFilter(null)} className="text-primary hover:underline mr-auto">Clear filter</button>}
       </div>
 

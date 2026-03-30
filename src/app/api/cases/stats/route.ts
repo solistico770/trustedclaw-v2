@@ -9,7 +9,8 @@ export async function GET() {
 
   const db = createServiceClient();
 
-  const [attentionRes, criticalRes, openRes, handledRes, entityRes, nextScanRes, scansToday, empowermentRes, pendingSignalsRes, overdueTasksRes] = await Promise.all([
+  const cutoff24h = new Date(Date.now() - 86400000).toISOString();
+  const [attentionRes, criticalRes, openRes, handledRes, entityRes, nextScanRes, scansToday, empowermentRes, pendingSignalsRes, overdueTasksRes, signals24hRes, signalsTotalRes] = await Promise.all([
     db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).in("status", ["action_needed", "escalated"]),
     db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).not("status", "in", '("closed","merged")').lte("urgency", 1),
     db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).in("status", ["open", "in_progress", "scheduled"]),
@@ -20,6 +21,8 @@ export async function GET() {
     db.from("case_events").select("empowerment_line").eq("user_id", userId).not("empowerment_line", "is", null).order("created_at", { ascending: false }).limit(1).single(),
     db.from("signals").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "pending"),
     db.from("tasks").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "open").lt("due_at", new Date().toISOString()),
+    db.from("signals").select("*", { count: "exact", head: true }).eq("user_id", userId).gte("occurred_at", cutoff24h),
+    db.from("signals").select("*", { count: "exact", head: true }).eq("user_id", userId),
   ]);
 
   const lastScan = await db.from("scan_logs").select("run_at").eq("user_id", userId).order("run_at", { ascending: false }).limit(1).single();
@@ -31,6 +34,8 @@ export async function GET() {
     handled: handledRes.count || 0,
     entities: entityRes.count || 0,
     pending_signals: pendingSignalsRes.count || 0,
+    signals_24h: signals24hRes.count || 0,
+    signals_total: signalsTotalRes.count || 0,
     overdue_tasks: overdueTasksRes.count || 0,
     last_scan_ago_sec: lastScan.data?.run_at ? Math.round((Date.now() - new Date(lastScan.data.run_at).getTime()) / 1000) : null,
     next_scan_in_sec: nextScanRes.data?.next_scan_at ? Math.max(0, Math.round((new Date(nextScanRes.data.next_scan_at).getTime() - Date.now()) / 1000)) : null,
