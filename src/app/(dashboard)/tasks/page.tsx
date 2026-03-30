@@ -48,7 +48,7 @@ export default function TasksPage() {
     if (scheduledFilter) params.set("scheduled", scheduledFilter);
     if (search) params.set("search", search);
     const data = await fetch(`/api/tasks?${params}`).then(r => r.json());
-    if (Array.isArray(data)) setTasks(data);
+    setTasks(data?.data || (Array.isArray(data) ? data : []));
     setLoading(false);
   }, [statusFilter, dueFilter, scheduledFilter, search]);
 
@@ -56,7 +56,8 @@ export default function TasksPage() {
     load();
     // Load cases for create form
     fetch("/api/cases").then(r => r.json()).then(data => {
-      if (Array.isArray(data)) setCases(data.map((c: { id: string; case_number: number; title: string }) => ({ id: c.id, case_number: c.case_number, title: c.title })));
+      const arr = data?.data || (Array.isArray(data) ? data : []);
+      setCases(arr.map((c: { id: string; case_number: number; title: string }) => ({ id: c.id, case_number: c.case_number, title: c.title })));
     });
     const sb = createBrowserClient();
     const ch = sb.channel("tasks-page").on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, () => load()).subscribe();

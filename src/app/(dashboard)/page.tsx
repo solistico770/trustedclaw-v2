@@ -73,7 +73,7 @@ export default function CasesBoard() {
       fetch(`/api/cases${statusFilter ? `?status=${statusFilter}` : ""}`).then(r => r.json()),
       fetch(`/api/cases/stats`).then(r => r.json()),
     ]);
-    if (Array.isArray(casesData)) setCases(casesData);
+    setCases(casesData?.data || (Array.isArray(casesData) ? casesData : []));
     if (statsData.attention !== undefined) setStats(statsData);
     setLoading(false);
   }, [filter, dashFilter]);

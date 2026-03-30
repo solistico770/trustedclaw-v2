@@ -638,7 +638,7 @@ function EntitiesTab() {
   const load = useCallback(async () => {
     const params = `${statusFilter !== "all" ? `status=${statusFilter}` : ""}${q ? `${statusFilter !== "all" ? "&" : ""}q=${q}` : ""}`;
     const data = await (await fetch(`/api/entities?${params}`)).json();
-    if (Array.isArray(data)) setEntities(data);
+    setEntities(data?.data || (Array.isArray(data) ? data : []));
     setLoading(false);
   }, [statusFilter, q]);
 

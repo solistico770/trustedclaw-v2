@@ -61,7 +61,7 @@ export default function CaseDetail() {
       fetch(`/api/tasks?case_id=${id}`).then(r => r.json()),
     ]);
     setData(d);
-    if (Array.isArray(t)) setTasks(t);
+    setTasks(t?.data || (Array.isArray(t) ? t : []));
     setLoading(false);
   }, [id]);
 
