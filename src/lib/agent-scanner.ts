@@ -31,6 +31,10 @@ export async function triagePendingSignals(db: SupabaseClient, userId: string): 
       return { signals_triaged: 0, signals_assigned: 0, signals_ignored: 0, cases_created: 0, tokens: 0, duration_ms: 0, status: "skipped" };
     }
 
+    // Claim these signals (mark as 'triaging') to prevent parallel batches from grabbing the same ones
+    const claimedIds = pendingSignals.map(s => s.id);
+    await db.from("signals").update({ status: "triaging" }).in("id", claimedIds);
+
     // Fetch open case summaries
     const { data: openCasesRaw } = await db.from("cases")
       .select("id, case_number, title, summary, importance")

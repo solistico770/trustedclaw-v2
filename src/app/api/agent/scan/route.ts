@@ -12,7 +12,9 @@ export async function POST(req: NextRequest) {
 }
 
 const MAX_RUNTIME_MS = 55_000;
-const TRIAGE_BUDGET_MS = 25_000;
+const TRIAGE_BATCH_SIZE = 20;
+const TRIAGE_PARALLEL = 5; // fire up to 5 triage calls in parallel
+const CASE_PARALLEL = 3;   // scan up to 3 cases in parallel
 
 async function handleScan(req: NextRequest) {
   const startTime = Date.now();
@@ -32,7 +34,7 @@ async function handleScan(req: NextRequest) {
 
   const db = createServiceClient();
 
-  // Determine user_id — get from first pending signal or first open case
+  // Determine user_id
   const { data: anySignal } = await db.from("signals").select("user_id").eq("status", "pending").limit(1).single();
   const { data: anyCase } = await db.from("cases").select("user_id").not("status", "in", '("closed","merged")').limit(1).single();
   const userId = anySignal?.user_id || anyCase?.user_id;
@@ -41,17 +43,44 @@ async function handleScan(req: NextRequest) {
     return NextResponse.json({ message: "No pending signals or open cases", cases_scanned: 0 });
   }
 
-  // ─── PASS 1: Signal Triage ────────────────────────────────────────────────
+  // ─── PASS 1: PARALLEL Signal Triage ─────────────────────────────────────
+  // Count pending signals and fire parallel triage batches
+  const { count: pendingCount } = await db.from("signals")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId).eq("status", "pending");
+
+  const batchCount = Math.min(TRIAGE_PARALLEL, Math.ceil((pendingCount || 0) / TRIAGE_BATCH_SIZE));
+
   let triageResult: TriageResult = {
     signals_triaged: 0, signals_assigned: 0, signals_ignored: 0,
     cases_created: 0, tokens: 0, duration_ms: 0, status: "skipped",
   };
 
-  if (Date.now() - startTime < TRIAGE_BUDGET_MS) {
-    triageResult = await triagePendingSignals(db, userId);
+  if (batchCount > 0) {
+    // Fire parallel triage calls — each picks up a batch of pending signals
+    // triagePendingSignals uses LIMIT 20 and processes whatever is pending
+    const triagePromises = Array.from({ length: batchCount }, () =>
+      triagePendingSignals(db, userId).catch(err => {
+        console.error("[scan] Triage batch failed:", err);
+        return { signals_triaged: 0, signals_assigned: 0, signals_ignored: 0, cases_created: 0, tokens: 0, duration_ms: 0, status: "failed" as const, error: String(err) };
+      })
+    );
+
+    const triageResults = await Promise.all(triagePromises);
+
+    // Merge triage results
+    triageResult = {
+      signals_triaged: triageResults.reduce((s, r) => s + r.signals_triaged, 0),
+      signals_assigned: triageResults.reduce((s, r) => s + r.signals_assigned, 0),
+      signals_ignored: triageResults.reduce((s, r) => s + r.signals_ignored, 0),
+      cases_created: triageResults.reduce((s, r) => s + r.cases_created, 0),
+      tokens: triageResults.reduce((s, r) => s + r.tokens, 0),
+      duration_ms: Math.max(...triageResults.map(r => r.duration_ms)),
+      status: triageResults.some(r => r.status === "failed") ? "failed" : "success",
+    };
   }
 
-  // ─── PASS 2: Case Review ─────────────────────────────────────────────────
+  // ─── PASS 2: PARALLEL Case Review ───────────────────────────────────────
   const allResults: ScanCaseResult[] = [];
   let casesMerged = 0;
   let cycles = 0;
@@ -68,26 +97,29 @@ async function handleScan(req: NextRequest) {
       const { data } = await db.from("cases").select("id, user_id, status, importance")
         .not("status", "in", '("closed","merged")')
         .lte("next_scan_at", new Date().toISOString())
-        .order("importance", { ascending: false }).limit(3);
+        .order("importance", { ascending: false }).limit(CASE_PARALLEL);
       casesToScan = data;
     }
 
     if (!casesToScan || casesToScan.length === 0) break;
 
-    for (const c of casesToScan) {
-      if (Date.now() - startTime > MAX_RUNTIME_MS) break;
-      const result = await scanCase(db, c.id, c.user_id, triggeredBy);
+    // Scan cases in parallel
+    const casePromises = casesToScan.map(c =>
+      scanCase(db, c.id, c.user_id, triggeredBy).catch(err => ({
+        case_id: c.id, decision: "error", reasoning: String(err),
+        commands_count: 0, commands_executed: [], skills_pulled: [],
+        tokens: 0, duration_ms: 0, status: "failed" as const, error: String(err),
+      }))
+    );
+
+    const batchResults = await Promise.all(casePromises);
+    for (const result of batchResults) {
       allResults.push(result);
       if (result.decision === "merge") casesMerged++;
     }
 
     if (scanAll && cycles === 1) continue;
-
-    if (Date.now() - startTime + 3000 < MAX_RUNTIME_MS) {
-      await new Promise(r => setTimeout(r, 2000));
-    } else {
-      break;
-    }
+    if (Date.now() - startTime + 3000 >= MAX_RUNTIME_MS) break;
   }
 
   const durationMs = Date.now() - startTime;
