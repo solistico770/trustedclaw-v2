@@ -6,7 +6,7 @@ import { logAudit } from "@/lib/audit";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { gate_id, gate_type, sender_name, channel_name, channel_id, content } = body;
+    const { gate_id, gate_type, sender_name, content } = body;
     let { user_id } = body;
 
     if (!content) {
@@ -41,32 +41,29 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // channel_id — channels table is deprecated, skip lookup
-    const chId = channel_id || null;
-
-    // Save signal — NO case creation. Status = pending.
+    // Save signal — pending for triage
     const now = new Date().toISOString();
     const { data: signal, error: signalErr } = await db.from("signals").insert({
       user_id,
       gate_id: gateId,
       case_id: null,
-      channel_id: chId,
       status: "pending",
-      raw_payload: { gate_type: gate_type || "generic", sender_name, channel_name, content },
+      raw_payload: { gate_type: gate_type || "generic", sender_name, content },
       sender_identifier: sender_name || "Unknown",
-      channel_identifier: channel_name || "Default",
+      channel_identifier: body.channel_name || "Default",
       occurred_at: now,
       received_at: now,
     }).select("id").single();
 
     if (signalErr || !signal) {
+      console.error("[ingest] Signal insert failed:", signalErr);
       return NextResponse.json({ error: "Failed to save signal" }, { status: 503 });
     }
 
     await logAudit(db, {
       user_id, actor: "system", action_type: "signal_ingested",
       target_type: "signal", target_id: signal.id,
-      reasoning: `From ${gate_type || "generic"}/${channel_name || "default"}`,
+      reasoning: `From gate ${gate_type || "generic"}`,
     });
 
     return NextResponse.json({ signal_id: signal.id });
