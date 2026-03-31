@@ -365,9 +365,12 @@ function GatesTab() {
     await load();
   }
 
-  async function rescanGate(gateId: string) {
-    const { command_id } = await sendCommand("rescan_history", { gate_id: gateId, hours: "24" });
-    await pollResponse(command_id, 60000);
+  const [rescanningGate, setRescanningGate] = useState<string | null>(null);
+  async function rescanGate(gateId: string, hours: string) {
+    setRescanningGate(gateId);
+    const { command_id } = await sendCommand("rescan_history", { gate_id: gateId, hours });
+    await pollResponse(command_id, 180000);
+    setRescanningGate(null);
     await load();
   }
 
@@ -532,7 +535,19 @@ function GatesTab() {
                     {isConnected && (
                       <>
                         <Button size="sm" variant="ghost" className="text-[11px] h-7 text-destructive" onClick={() => disconnectGate(g.id, g.type)}>Disconnect</Button>
-                        {g.type === "whatsapp" && <Button size="sm" variant="ghost" className="text-[11px] h-7" onClick={() => rescanGate(g.id)}>Rescan 24h</Button>}
+                        {g.type === "whatsapp" && rescanningGate === g.id && <Button size="sm" disabled className="text-[11px] h-7">Scanning...</Button>}
+                        {g.type === "whatsapp" && rescanningGate !== g.id && (
+                          <select className="h-7 bg-input border border-border rounded-lg px-2 text-[11px] text-foreground" defaultValue=""
+                            onChange={e => { if (e.target.value) { rescanGate(g.id, e.target.value); e.target.value = ""; } }}>
+                            <option value="" disabled>Rescan...</option>
+                            <option value="1">1 hour</option>
+                            <option value="6">6 hours</option>
+                            <option value="24">24 hours</option>
+                            <option value="72">3 days</option>
+                            <option value="168">7 days</option>
+                            <option value="720">30 days</option>
+                          </select>
+                        )}
                       </>
                     )}
                   </div>
