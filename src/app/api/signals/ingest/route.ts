@@ -43,17 +43,16 @@ export async function POST(req: NextRequest) {
     }
 
     // --- Gate tracking config: filter by message type ---
+    // Use is_group/is_status from metadata (set by claw-listener), not channel_name guessing
     const { data: gate } = await db.from("gates")
       .select("metadata").eq("id", gateId).single();
     const gm = (gate?.metadata as Record<string, string>) || {};
-    // Defaults: private=true, groups=false, status=false
     const trackPrivate = gm.track_private !== undefined ? gm.track_private === "true" : true;
-    const trackGroups = gm.track_groups !== undefined ? gm.track_groups === "true" : false;
+    const trackGroups = gm.track_groups !== undefined ? gm.track_groups === "true" : true;   // default TRUE
     const trackStatus = gm.track_status !== undefined ? gm.track_status === "true" : false;
 
-    const channel = (body.channel_name || "").toLowerCase();
-    const isStatus = channel === "status" || channel === "stories" || channel.includes("status");
-    const isGroup = !!(body.channel_name && !isStatus && body.channel_name !== "Direct");
+    const isGroup = !!(metadata?.is_group);
+    const isStatus = !!(metadata?.is_status);
     const isPrivate = !isGroup && !isStatus;
 
     if (isStatus && !trackStatus) {
