@@ -25,8 +25,8 @@ export default function EntitiesPage() {
 
   const load = useCallback(async () => {
     const params = `status=active${q ? `&q=${q}` : ""}${typeFilter ? `&type=${typeFilter}` : ""}`;
-    const data = await (await fetch(`/api/entities?${params}`)).json();
-    if (Array.isArray(data)) setEntities(data);
+    const res = await (await fetch(`/api/entities?${params}`)).json();
+    setEntities(res?.data || (Array.isArray(res) ? res : []));
     setLoading(false);
   }, [q, typeFilter]);
 
