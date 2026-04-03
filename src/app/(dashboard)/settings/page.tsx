@@ -502,17 +502,19 @@ function GatesTab() {
                     <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Track:</span>
                     {[
                       { key: "track_private", label: "Private msgs", defaultVal: true },
-                      { key: "track_groups", label: "Group msgs", defaultVal: false },
+                      { key: "track_groups", label: "Group msgs", defaultVal: true },
                       { key: "track_status", label: "Status/Stories", defaultVal: false },
                     ].map(opt => {
                       const raw = meta[opt.key];
-                      const val = raw !== undefined ? raw === "true" : opt.defaultVal;
+                      // Handle both boolean and string values from JSONB
+                      const isOn = raw === undefined || raw === null ? opt.defaultVal : raw === true || raw === "true";
                       return (
                         <label key={opt.key} className="flex items-center gap-1.5 cursor-pointer">
-                          <input type="checkbox" checked={val as boolean} onChange={async () => {
+                          <input type="checkbox" checked={isOn} onChange={async () => {
+                            const newVal = !isOn;
                             await fetch(`/api/gates/${g.id}`, {
                               method: "PATCH", headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ metadata: { ...meta, [opt.key]: !val } }),
+                              body: JSON.stringify({ metadata: { ...meta, [opt.key]: newVal } }),
                             });
                             load();
                           }} className="w-3.5 h-3.5 rounded accent-primary" />
