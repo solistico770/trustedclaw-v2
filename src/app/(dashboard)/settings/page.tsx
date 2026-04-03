@@ -507,7 +507,7 @@ function GatesTab() {
                     ].map(opt => {
                       const raw = meta[opt.key];
                       // Handle both boolean and string values from JSONB
-                      const isOn = raw === undefined || raw === null ? opt.defaultVal : raw === true || raw === "true";
+                      const isOn = raw === undefined || raw === null ? opt.defaultVal : String(raw) === "true";
                       return (
                         <label key={opt.key} className="flex items-center gap-1.5 cursor-pointer">
                           <input type="checkbox" checked={isOn} onChange={async () => {
