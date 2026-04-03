@@ -4,6 +4,12 @@ import { validateApiKey } from "@/lib/api-key-auth";
 import { logAudit } from "@/lib/audit";
 import { createHash } from "crypto";
 
+// Handle both boolean and string values from JSONB metadata
+function toBool(v: unknown, def: boolean): boolean {
+  if (v === undefined || v === null) return def;
+  return v === true || v === "true";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -42,37 +48,36 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // --- Gate tracking config: filter by message type ---
-    // Use is_group/is_status from metadata (set by claw-listener), not channel_name guessing
+    // --- Gate tracking config: SINGLE filter point ---
     const { data: gate } = await db.from("gates")
       .select("metadata").eq("id", gateId).single();
-    const gm = (gate?.metadata as Record<string, string>) || {};
-    const trackPrivate = gm.track_private !== undefined ? gm.track_private === "true" : true;
-    const trackGroups = gm.track_groups !== undefined ? gm.track_groups === "true" : true;   // default TRUE
-    const trackStatus = gm.track_status !== undefined ? gm.track_status === "true" : false;
+    const gm = (gate?.metadata || {}) as Record<string, unknown>;
+    const trackPrivate = toBool(gm.track_private, true);
+    const trackGroups = toBool(gm.track_groups, true);
+    const trackStatus = toBool(gm.track_status, false);
 
+    // Read structured flags from metadata (set by claw-listener forwarder)
     const isGroup = !!(metadata?.is_group);
     const isStatus = !!(metadata?.is_status);
     const isPrivate = !isGroup && !isStatus;
 
     if (isStatus && !trackStatus) {
-      return NextResponse.json({ skipped: true, reason: "status tracking disabled for this gate" });
+      return NextResponse.json({ skipped: true, reason: "status tracking disabled" });
     }
     if (isGroup && !trackGroups) {
-      return NextResponse.json({ skipped: true, reason: "group tracking disabled for this gate" });
+      return NextResponse.json({ skipped: true, reason: "group tracking disabled" });
     }
     if (isPrivate && !trackPrivate) {
-      return NextResponse.json({ skipped: true, reason: "private tracking disabled for this gate" });
+      return NextResponse.json({ skipped: true, reason: "private tracking disabled" });
     }
 
-    // Dedup hash: same gate + sender + content + timestamp = same signal
+    // Dedup hash
     const now = new Date().toISOString();
     const signalTime = occurred_at || now;
     const dedupHash = createHash("sha256")
       .update(`${gateId}:${sender_name || ""}:${content}:${signalTime}`)
       .digest("hex");
 
-    // Check if signal already exists (dedup)
     const { data: existingSignal } = await db.from("signals")
       .select("id").eq("dedup_hash", dedupHash).limit(1).single();
 
@@ -80,22 +85,39 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ signal_id: existingSignal.id, dedup: true });
     }
 
-    // Save signal — pending for triage
+    // Build rich context for signal display
+    const groupName = isGroup ? (metadata?.group_name || metadata?.chat_name || body.channel_name || null) : null;
+    const senderDisplayName = metadata?.sender_name || sender_name || "Unknown";
+
+    // Channel identifier: group name for groups, sender name for private
+    const channelId = isGroup ? (groupName || "Group") : (senderDisplayName || "Direct");
+
+    // Save signal with clear context
     const { data: signal, error: signalErr } = await db.from("signals").insert({
       user_id,
       gate_id: gateId,
       case_id: null,
       status: "pending",
       dedup_hash: dedupHash,
-      raw_payload: { gate_type: gate_type || "generic", sender_name, content, ...(metadata || {}) },
+      raw_payload: {
+        gate_type: gate_type || "generic",
+        sender_name: senderDisplayName,
+        content,
+        // Structured context fields
+        is_group: isGroup,
+        is_private: isPrivate,
+        is_status: isStatus,
+        group_name: groupName,
+        // Pass through all metadata
+        ...(metadata || {}),
+      },
       sender_identifier: sender_name || "Unknown",
-      channel_identifier: body.channel_name || "Default",
+      channel_identifier: channelId,
       occurred_at: signalTime,
       received_at: now,
     }).select("id").single();
 
     if (signalErr || !signal) {
-      // Could be unique constraint violation (race condition dedup)
       if (signalErr?.code === "23505") {
         return NextResponse.json({ signal_id: null, dedup: true });
       }
@@ -106,7 +128,7 @@ export async function POST(req: NextRequest) {
     await logAudit(db, {
       user_id, actor: "system", action_type: "signal_ingested",
       target_type: "signal", target_id: signal.id,
-      reasoning: `From gate ${gate_type || "generic"}`,
+      reasoning: `${isGroup ? "Group" : "Private"}: ${channelId}`,
     });
 
     return NextResponse.json({ signal_id: signal.id });
