@@ -74,14 +74,17 @@ export async function POST(req: NextRequest) {
     // Dedup hash
     const now = new Date().toISOString();
     const signalTime = occurred_at || now;
+    // Use stable identifiers for dedup (not display names which can vary between live/backfill)
+    const stableDedupSender = metadata?.sender_jid || metadata?.phone || sender_name || "";
     const dedupHash = createHash("sha256")
-      .update(`${gateId}:${sender_name || ""}:${content}:${signalTime}`)
+      .update(`${gateId}:${stableDedupSender}:${content}:${signalTime}`)
       .digest("hex");
 
     const { data: existingSignal } = await db.from("signals")
       .select("id").eq("dedup_hash", dedupHash).limit(1).single();
 
     if (existingSignal) {
+      // Skip entity resolution for duplicate signals
       return NextResponse.json({ signal_id: existingSignal.id, dedup: true });
     }
 
@@ -89,8 +92,15 @@ export async function POST(req: NextRequest) {
     const groupName = isGroup ? (metadata?.group_name || metadata?.chat_name || body.channel_name || null) : null;
     const senderDisplayName = metadata?.sender_name || sender_name || "Unknown";
 
-    // Channel identifier: group name for groups, sender name for private
-    const channelId = isGroup ? (groupName || "Group") : (senderDisplayName || "Direct");
+    // Deterministic sender ID: use stable JID (e.g. "972501234567@c.us") or phone, never display name
+    // This ensures the same person always maps to the same identifier for entity resolution
+    const stableSenderId = metadata?.sender_jid || metadata?.phone || sender_name || "Unknown";
+
+    // Channel identifier: group name for groups, chat_name for private
+    // WhatsApp multi-device uses LIDs (not real phones) for all JIDs, so chat_name
+    // (contact name or formatted phone) is the only human-readable identifier
+    const privateChatName = metadata?.chat_name || metadata?.chat_id || stableSenderId || "Direct";
+    const channelId = isGroup ? (groupName || "Group") : privateChatName;
 
     // Save signal with clear context
     const { data: signal, error: signalErr } = await db.from("signals").insert({
@@ -111,7 +121,7 @@ export async function POST(req: NextRequest) {
         // Pass through all metadata
         ...(metadata || {}),
       },
-      sender_identifier: sender_name || "Unknown",
+      sender_identifier: stableSenderId,
       channel_identifier: channelId,
       occurred_at: signalTime,
       received_at: now,
@@ -125,13 +135,87 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Failed to save signal" }, { status: 503 });
     }
 
+    // Auto-resolve sender to known entity — or auto-create if new
+    let resolvedEntityId: string | null = null;
+    try {
+      const senderJid = metadata?.sender_jid;
+      const tgUserId = metadata?.from?.id ? String(metadata.from.id) : null;
+      const senderPhone = metadata?.phone || null;
+      const gateTypeVal = gate_type || "generic";
+
+      // 1. Try to find existing entity by stable ID
+      if (senderJid && (gateTypeVal === "whatsapp" || senderJid.includes("@"))) {
+        const { data: entity } = await db.from("entities")
+          .select("id").eq("user_id", user_id).eq("wa_jid", senderJid).limit(1).single();
+        if (entity) resolvedEntityId = entity.id;
+      } else if (tgUserId && gateTypeVal === "telegram") {
+        const { data: entity } = await db.from("entities")
+          .select("id").eq("user_id", user_id).eq("tg_user_id", tgUserId).limit(1).single();
+        if (entity) resolvedEntityId = entity.id;
+      }
+
+      // 2. Auto-create entity for new senders (private AND group — skip status only)
+      //    In groups, sender_jid identifies the individual person, not the group
+      if (!resolvedEntityId && !isStatus && (senderJid || tgUserId)) {
+        // Best name: display name > phone > JID/TG-ID
+        const tgFirst = metadata?.from?.first_name || null;
+        const tgLast = metadata?.from?.last_name || null;
+        const tgFullName = [tgFirst, tgLast].filter(Boolean).join(" ") || null;
+        const bestName = (senderDisplayName !== "Unknown" && senderDisplayName)
+          || tgFullName
+          || senderPhone
+          || (senderJid?.replace(/@.*/, ""))  // strip @c.us / @lid suffix
+          || tgUserId
+          || "Unknown";
+
+        // Extract phone from WA JID if it's phone-format (10-15 digits@c.us)
+        const jidPhone = senderJid?.match(/^(\d{10,15})@c\.us$/)?.[1] || null;
+        const bestPhone = senderPhone || jidPhone;
+
+        const insertData: Record<string, unknown> = {
+          user_id,
+          type: "person",
+          canonical_name: bestName,
+          status: "active",
+        };
+        if (senderJid) insertData.wa_jid = senderJid;
+        if (bestPhone) insertData.phone = bestPhone;
+        if (tgUserId) insertData.tg_user_id = tgUserId;
+        const tgHandle = metadata?.from?.username || null;
+        if (tgHandle) insertData.telegram_handle = tgHandle;
+
+        const { data: newEnt, error: entErr } = await db.from("entities")
+          .insert(insertData).select("id").single();
+        if (newEnt) {
+          resolvedEntityId = newEnt.id;
+        } else if (entErr?.code === "23505") {
+          // Unique constraint — concurrent insert race; re-fetch
+          const col = senderJid ? "wa_jid" : "tg_user_id";
+          const val = senderJid || tgUserId;
+          const { data: raced } = await db.from("entities")
+            .select("id").eq("user_id", user_id).eq(col, val).limit(1).single();
+          if (raced) resolvedEntityId = raced.id;
+        }
+      }
+
+      // 3. Link signal ↔ entity
+      if (resolvedEntityId) {
+        await db.from("signal_entities").upsert(
+          { signal_id: signal.id, entity_id: resolvedEntityId, resolution_method: "auto" },
+          { onConflict: "signal_id,entity_id" }
+        );
+      }
+    } catch {
+      // Auto-resolve is best-effort — don't fail ingestion
+    }
+
     await logAudit(db, {
       user_id, actor: "system", action_type: "signal_ingested",
       target_type: "signal", target_id: signal.id,
       reasoning: `${isGroup ? "Group" : "Private"}: ${channelId}`,
     });
 
-    return NextResponse.json({ signal_id: signal.id });
+    return NextResponse.json({ signal_id: signal.id, entity_id: resolvedEntityId });
   } catch (e) {
     console.error("[ingest]", e);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { Fragment, useEffect, useState, useCallback, useMemo } from "react";
 import { createBrowserClient } from "@/lib/supabase-browser";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -133,11 +133,41 @@ function StatCard({ label, value, accent }: { label: string; value: number; acce
   );
 }
 
+function SignalDetails({ signal }: { signal: Signal }) {
+  const p = signal.raw_payload;
+  const rows: [string, string][] = [
+    ["Direction", p.direction || "—"],
+    ["Sender", String(p.sender_name || "—")],
+    ["Phone", p.phone || "—"],
+    ["Channel", signal.channel_identifier || "—"],
+    ["Sender ID", signal.sender_identifier || "—"],
+    ["Chat", String((p as Record<string, unknown>).chat_name || "—")],
+    ["Chat ID", String((p as Record<string, unknown>).chat_id || "—")],
+    ["Type", p.is_group ? "Group" : (p as Record<string, unknown>).is_status ? "Status" : "Private"],
+    ["Gate", String(p.gate_type || "—")],
+    ["Media", p.media_type || "—"],
+    ["Status", signal.status],
+    ["Occurred", new Date(signal.occurred_at).toLocaleString()],
+    ["Received", new Date(signal.received_at).toLocaleString()],
+  ];
+  return (
+    <div className="mt-1.5 rounded-lg bg-muted/60 border border-border/50 px-3 py-2 text-[11px] grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+      {rows.map(([k, v]) => (
+        <Fragment key={k}>
+          <span className="text-muted-foreground/70 font-medium">{k}</span>
+          <span className="text-foreground/80 truncate" title={v}>{v}</span>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
 function MessageBubble({ signal, isLast }: { signal: Signal; isLast: boolean }) {
   const p = signal.raw_payload;
   const isMe = p.direction === "outgoing";
   const st = STATUS_CONFIG[signal.status] || STATUS_CONFIG.pending;
   const router = useRouter();
+  const [showDetails, setShowDetails] = useState(false);
 
   return (
     <div className={`flex gap-2 ${isMe ? "flex-row-reverse" : ""}`}>
@@ -156,6 +186,13 @@ function MessageBubble({ signal, isLast }: { signal: Signal; isLast: boolean }) 
         <div className={`flex items-center gap-2 px-1 ${isMe ? "justify-end" : ""}`}>
           <span className="text-[10px] text-muted-foreground/60">{timeAgo(signal.occurred_at)}</span>
           <span className={`size-1.5 rounded-full ${st.dot}`} title={st.label} />
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            className={`text-[10px] font-medium transition-colors ${showDetails ? "text-primary" : "text-muted-foreground/50 hover:text-muted-foreground"}`}
+            title="Signal details"
+          >
+            info
+          </button>
           {signal.cases && (
             <button
               className="text-[10px] text-primary hover:underline font-medium"
@@ -165,6 +202,7 @@ function MessageBubble({ signal, isLast }: { signal: Signal; isLast: boolean }) 
             </button>
           )}
         </div>
+        {showDetails && <SignalDetails signal={signal} />}
         {signal.processing_decision?.reasoning && isLast && (
           <div className="mt-1 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-200/50 dark:border-violet-500/20 px-3 py-2 text-xs text-violet-700 dark:text-violet-300">
             <span className="font-medium">AI:</span> {signal.processing_decision.reasoning}
