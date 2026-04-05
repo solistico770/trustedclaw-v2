@@ -377,11 +377,25 @@ async function saveMessage(db: SupabaseClient, userId: string, chatId: number, r
 type BotCommand =
   | { type: "create_case"; title: string; summary?: string; urgency?: number; importance?: number }
   | { type: "close_case"; case_number: number }
-  | { type: "update_case"; case_number: number; status?: string; urgency?: number; importance?: number; summary?: string }
+  | { type: "update_case"; case_number: number; status?: string; urgency?: number; importance?: number; summary?: string; title?: string }
   | { type: "merge_cases"; from_number: number; into_number: number; reason: string }
+  | { type: "list_cases"; status?: string; search?: string; limit?: number }
+  | { type: "get_case"; case_number: number }
   | { type: "create_entity"; name: string; entity_type: string; phone?: string; email?: string; telegram_handle?: string }
-  | { type: "create_task"; title: string; case_number?: number; due_at?: string }
+  | { type: "update_entity"; entity_id?: string; name?: string; canonical_name?: string; entity_type?: string; phone?: string; email?: string; telegram_handle?: string; whatsapp_number?: string; website?: string; external_id?: string }
+  | { type: "approve_entity"; entity_id?: string; name?: string }
+  | { type: "reject_entity"; entity_id?: string; name?: string }
+  | { type: "merge_entities"; source_name: string; target_name: string; reason?: string }
+  | { type: "list_entities"; entity_type?: string; status?: string; search?: string; limit?: number }
+  | { type: "get_entity"; entity_id?: string; name?: string }
+  | { type: "link_entity"; entity_name: string; case_number: number; role?: string }
+  | { type: "unlink_entity"; entity_name: string; case_number: number }
+  | { type: "create_task"; title: string; case_number?: number; due_at?: string; scheduled_at?: string; description?: string }
   | { type: "close_task"; task_id: string }
+  | { type: "update_task"; task_id: string; title?: string; description?: string; due_at?: string; scheduled_at?: string }
+  | { type: "reopen_task"; task_id: string }
+  | { type: "list_tasks"; status?: string; case_number?: number; search?: string; limit?: number }
+  | { type: "list_signals"; case_number?: number; entity_name?: string; status?: string; limit?: number }
   | { type: "scan_case"; case_number: number }
   | { type: "trigger_scan" }
   | { type: "web_search"; query: string }
@@ -425,8 +439,11 @@ async function executeCommands(db: SupabaseClient, userId: string, commands: Bot
             if (cmd.urgency) updates.urgency = cmd.urgency;
             if (cmd.importance) updates.importance = cmd.importance;
             if (cmd.summary) updates.summary = cmd.summary;
+            if (cmd.title) updates.title = cmd.title;
             await db.from("cases").update(updates).eq("id", c.id);
             results.push(`Updated case #${cmd.case_number}`);
+          } else {
+            results.push(`Case #${cmd.case_number} not found`);
           }
           break;
         }
@@ -462,20 +479,312 @@ async function executeCommands(db: SupabaseClient, userId: string, commands: Bot
               .select("id").eq("user_id", userId).eq("case_number", cmd.case_number).single();
             caseId = c?.id || null;
           }
-          await db.from("tasks").insert({
+          const { data: newTask } = await db.from("tasks").insert({
             user_id: userId,
             case_id: caseId,
             title: cmd.title,
+            description: cmd.description || null,
             status: "open",
             due_at: cmd.due_at || null,
-          });
-          results.push(`Created task "${cmd.title}"`);
+            scheduled_at: cmd.scheduled_at || null,
+          }).select("id").single();
+          results.push(`Created task "${cmd.title}"${newTask ? ` [${newTask.id.slice(0, 8)}]` : ""}`);
           break;
         }
         case "close_task": {
           await db.from("tasks").update({ status: "closed", closed_at: new Date().toISOString() })
             .eq("id", cmd.task_id).eq("user_id", userId);
           results.push(`Closed task`);
+          break;
+        }
+        case "update_task": {
+          const updates: Record<string, unknown> = {};
+          if (cmd.title) updates.title = cmd.title;
+          if (cmd.description !== undefined) updates.description = cmd.description;
+          if (cmd.due_at) updates.due_at = cmd.due_at;
+          if (cmd.scheduled_at) updates.scheduled_at = cmd.scheduled_at;
+          const { error } = await db.from("tasks").update(updates).eq("id", cmd.task_id).eq("user_id", userId);
+          results.push(error ? `Failed to update task: ${error.message}` : `Updated task ${cmd.task_id.slice(0, 8)}`);
+          break;
+        }
+        case "reopen_task": {
+          await db.from("tasks").update({ status: "open", closed_at: null }).eq("id", cmd.task_id).eq("user_id", userId);
+          results.push(`Reopened task ${cmd.task_id.slice(0, 8)}`);
+          break;
+        }
+        case "list_tasks": {
+          let q = db.from("tasks")
+            .select("id, title, status, due_at, scheduled_at, case_id, created_at")
+            .eq("user_id", userId);
+          if (cmd.status) q = q.eq("status", cmd.status);
+          if (cmd.case_number) {
+            const { data: c } = await db.from("cases").select("id").eq("user_id", userId).eq("case_number", cmd.case_number).single();
+            if (c) q = q.eq("case_id", c.id);
+          }
+          if (cmd.search) q = q.ilike("title", `%${cmd.search}%`);
+          q = q.order("created_at", { ascending: false }).limit(cmd.limit || 20);
+          const { data: taskList } = await q;
+          if (!taskList?.length) { results.push("No tasks found"); break; }
+          const lines = taskList.map(t => {
+            const due = t.due_at ? ` due:${t.due_at.slice(0, 10)}` : "";
+            const sched = t.scheduled_at ? ` sched:${t.scheduled_at.slice(0, 10)}` : "";
+            return `[${t.id.slice(0, 8)}] "${t.title}" (${t.status})${due}${sched}`;
+          });
+          results.push(`Tasks (${taskList.length}):\n${lines.join("\n")}`);
+          break;
+        }
+        case "list_cases": {
+          let q = db.from("cases")
+            .select("case_number, title, status, urgency, importance, message_count, summary, created_at, updated_at")
+            .eq("user_id", userId);
+          if (cmd.status) {
+            if (cmd.status === "active") {
+              q = q.not("status", "in", '("closed","merged")');
+            } else {
+              q = q.eq("status", cmd.status);
+            }
+          }
+          if (cmd.search) q = q.or(`title.ilike.%${cmd.search}%,summary.ilike.%${cmd.search}%`);
+          q = q.order("urgency", { ascending: true }).order("importance", { ascending: true }).limit(cmd.limit || 25);
+          const { data: caseList } = await q;
+          if (!caseList?.length) { results.push("No cases found"); break; }
+          const lines = caseList.map(c =>
+            `#${c.case_number} [${c.status}] U${c.urgency}/I${c.importance} "${c.title}" (${c.message_count} signals)`
+          );
+          results.push(`Cases (${caseList.length}):\n${lines.join("\n")}`);
+          break;
+        }
+        case "get_case": {
+          const { data: c } = await db.from("cases")
+            .select("*")
+            .eq("user_id", userId).eq("case_number", cmd.case_number).single();
+          if (!c) { results.push(`Case #${cmd.case_number} not found`); break; }
+          // Get linked entities, recent signals, tasks
+          const [{ data: caseEntities }, { data: signals }, { data: caseTasks }, { data: events }] = await Promise.all([
+            db.from("case_entities")
+              .select("role, entities(id, canonical_name, type, status, phone, email, telegram_handle)")
+              .eq("case_id", c.id),
+            db.from("signals")
+              .select("id, sender_identifier, channel_identifier, status, occurred_at, raw_payload")
+              .eq("case_id", c.id)
+              .order("occurred_at", { ascending: false })
+              .limit(15),
+            db.from("tasks")
+              .select("id, title, status, due_at")
+              .eq("case_id", c.id)
+              .eq("user_id", userId),
+            db.from("case_events")
+              .select("event_type, empowerment_line, created_at")
+              .eq("case_id", c.id)
+              .order("created_at", { ascending: false })
+              .limit(5),
+          ]);
+
+          let detail = `Case #${c.case_number}: "${c.title}"\nStatus: ${c.status} | Urgency: ${c.urgency} | Importance: ${c.importance}\nSummary: ${c.summary || "none"}\nCreated: ${c.created_at} | Signals: ${c.message_count}`;
+
+          if (caseEntities?.length) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const entLines = caseEntities.map((ce: any) => {
+              const e = ce.entities;
+              return `  ${e.canonical_name} (${e.type}, ${ce.role})${e.phone ? ` ${e.phone}` : ""}`;
+            });
+            detail += `\n\nEntities (${caseEntities.length}):\n${entLines.join("\n")}`;
+          }
+
+          if (caseTasks?.length) {
+            const taskLines = caseTasks.map(t => `  [${t.id.slice(0, 8)}] "${t.title}" (${t.status})${t.due_at ? ` due:${t.due_at.slice(0, 10)}` : ""}`);
+            detail += `\n\nTasks (${caseTasks.length}):\n${taskLines.join("\n")}`;
+          }
+
+          if (signals?.length) {
+            const sigLines = signals.map(s => {
+              const payload = s.raw_payload as Record<string, unknown> || {};
+              const content = (payload.content as string || "").slice(0, 100);
+              return `  [${s.occurred_at?.slice(0, 16)}] ${s.sender_identifier || "unknown"}: ${content}`;
+            });
+            detail += `\n\nRecent Signals (${signals.length}):\n${sigLines.join("\n")}`;
+          }
+
+          if (events?.length) {
+            const evLines = events.map(e => `  ${e.created_at?.slice(0, 16)} ${e.event_type}: ${e.empowerment_line || "—"}`);
+            detail += `\n\nRecent Events:\n${evLines.join("\n")}`;
+          }
+
+          results.push(detail);
+          break;
+        }
+        case "list_entities": {
+          let q = db.from("entities")
+            .select("id, canonical_name, type, status, phone, email, telegram_handle, wa_jid, created_at")
+            .eq("user_id", userId);
+          if (cmd.entity_type) q = q.eq("type", cmd.entity_type);
+          if (cmd.status) q = q.eq("status", cmd.status);
+          if (cmd.search) q = q.or(`canonical_name.ilike.%${cmd.search}%,phone.ilike.%${cmd.search}%,email.ilike.%${cmd.search}%`);
+          q = q.order("canonical_name").limit(cmd.limit || 30);
+          const { data: entList } = await q;
+          if (!entList?.length) { results.push("No entities found"); break; }
+          const lines = entList.map(e => {
+            const contacts = [e.phone, e.email, e.telegram_handle].filter(Boolean).join(", ");
+            return `[${e.id.slice(0, 8)}] ${e.canonical_name} (${e.type}, ${e.status})${contacts ? ` — ${contacts}` : ""}`;
+          });
+          results.push(`Entities (${entList.length}):\n${lines.join("\n")}`);
+          break;
+        }
+        case "get_entity": {
+          let entityQ = db.from("entities").select("*").eq("user_id", userId);
+          if (cmd.entity_id) entityQ = entityQ.eq("id", cmd.entity_id);
+          else if (cmd.name) entityQ = entityQ.ilike("canonical_name", `%${cmd.name}%`);
+          const { data: ent } = await entityQ.limit(1).single();
+          if (!ent) { results.push(`Entity not found`); break; }
+
+          // Get connected cases and recent signals
+          const [{ data: linkedCases }, { data: sigEntities }] = await Promise.all([
+            db.from("case_entities")
+              .select("role, cases(case_number, title, status)")
+              .eq("entity_id", ent.id),
+            db.from("signal_entities")
+              .select("resolution_method, signals(id, occurred_at, raw_payload, case_id)")
+              .eq("entity_id", ent.id)
+              .order("created_at", { ascending: false })
+              .limit(10),
+          ]);
+
+          const contacts = [
+            ent.phone && `Phone: ${ent.phone}`,
+            ent.email && `Email: ${ent.email}`,
+            ent.telegram_handle && `TG: ${ent.telegram_handle}`,
+            ent.wa_jid && `WA: ${ent.wa_jid}`,
+            ent.website && `Web: ${ent.website}`,
+            ent.external_id && `ExtID: ${ent.external_id}`,
+          ].filter(Boolean).join(" | ");
+
+          let detail = `Entity: ${ent.canonical_name} (${ent.type})\nStatus: ${ent.status} | ID: ${ent.id.slice(0, 8)}\n${contacts || "No contact info"}`;
+          if (ent.aliases?.length) detail += `\nAliases: ${ent.aliases.join(", ")}`;
+
+          if (linkedCases?.length) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const caseLines = linkedCases.map((lc: any) => `  #${lc.cases.case_number} "${lc.cases.title}" [${lc.cases.status}] (${lc.role})`);
+            detail += `\n\nLinked Cases (${linkedCases.length}):\n${caseLines.join("\n")}`;
+          }
+
+          if (sigEntities?.length) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const sigLines = sigEntities.map((se: any) => {
+              const sig = se.signals;
+              const content = ((sig.raw_payload as Record<string, unknown>)?.content as string || "").slice(0, 80);
+              return `  [${sig.occurred_at?.slice(0, 16)}] ${content}`;
+            });
+            detail += `\n\nRecent Signals (${sigEntities.length}):\n${sigLines.join("\n")}`;
+          }
+
+          results.push(detail);
+          break;
+        }
+        case "update_entity": {
+          let entQ = db.from("entities").select("id").eq("user_id", userId);
+          if (cmd.entity_id) entQ = entQ.eq("id", cmd.entity_id);
+          else if (cmd.name) entQ = entQ.ilike("canonical_name", `%${cmd.name}%`);
+          const { data: ent } = await entQ.limit(1).single();
+          if (!ent) { results.push("Entity not found"); break; }
+          const updates: Record<string, unknown> = {};
+          if (cmd.canonical_name) updates.canonical_name = cmd.canonical_name;
+          if (cmd.entity_type) updates.type = cmd.entity_type;
+          if (cmd.phone !== undefined) updates.phone = cmd.phone || null;
+          if (cmd.email !== undefined) updates.email = cmd.email || null;
+          if (cmd.telegram_handle !== undefined) updates.telegram_handle = cmd.telegram_handle || null;
+          if (cmd.whatsapp_number !== undefined) updates.whatsapp_number = cmd.whatsapp_number || null;
+          if (cmd.website !== undefined) updates.website = cmd.website || null;
+          if (cmd.external_id !== undefined) updates.external_id = cmd.external_id || null;
+          const { error } = await db.from("entities").update(updates).eq("id", ent.id);
+          results.push(error ? `Failed: ${error.message}` : `Updated entity ${cmd.name || cmd.entity_id?.slice(0, 8)}`);
+          break;
+        }
+        case "approve_entity": {
+          let entQ = db.from("entities").select("id, canonical_name").eq("user_id", userId);
+          if (cmd.entity_id) entQ = entQ.eq("id", cmd.entity_id);
+          else if (cmd.name) entQ = entQ.ilike("canonical_name", `%${cmd.name}%`);
+          const { data: ent } = await entQ.limit(1).single();
+          if (!ent) { results.push("Entity not found"); break; }
+          await db.from("entities").update({ status: "active", approved_at: new Date().toISOString() }).eq("id", ent.id);
+          results.push(`Approved entity "${ent.canonical_name}"`);
+          break;
+        }
+        case "reject_entity": {
+          let entQ = db.from("entities").select("id, canonical_name").eq("user_id", userId);
+          if (cmd.entity_id) entQ = entQ.eq("id", cmd.entity_id);
+          else if (cmd.name) entQ = entQ.ilike("canonical_name", `%${cmd.name}%`);
+          const { data: ent } = await entQ.limit(1).single();
+          if (!ent) { results.push("Entity not found"); break; }
+          await db.from("entities").update({ status: "rejected" }).eq("id", ent.id);
+          results.push(`Rejected entity "${ent.canonical_name}"`);
+          break;
+        }
+        case "merge_entities": {
+          const [{ data: source }, { data: target }] = await Promise.all([
+            db.from("entities").select("id, canonical_name").eq("user_id", userId).ilike("canonical_name", `%${cmd.source_name}%`).limit(1).single(),
+            db.from("entities").select("id, canonical_name").eq("user_id", userId).ilike("canonical_name", `%${cmd.target_name}%`).limit(1).single(),
+          ]);
+          if (!source || !target) { results.push(`Could not find both entities (source: ${cmd.source_name}, target: ${cmd.target_name})`); break; }
+          // Move case_entities links
+          const { data: sourceCases } = await db.from("case_entities").select("case_id, role").eq("entity_id", source.id);
+          for (const sc of sourceCases || []) {
+            // Upsert — avoid duplicate PK
+            await db.from("case_entities").upsert({ case_id: sc.case_id, entity_id: target.id, role: sc.role }, { onConflict: "case_id,entity_id" });
+          }
+          // Move signal_entities links
+          const { data: sourceSigs } = await db.from("signal_entities").select("signal_id, resolution_method").eq("entity_id", source.id);
+          for (const ss of sourceSigs || []) {
+            await db.from("signal_entities").upsert({ signal_id: ss.signal_id, entity_id: target.id, resolution_method: ss.resolution_method }, { onConflict: "signal_id,entity_id" });
+          }
+          // Archive source
+          await db.from("entities").update({ status: "archived" }).eq("id", source.id);
+          results.push(`Merged "${source.canonical_name}" → "${target.canonical_name}" (moved links, archived source)`);
+          break;
+        }
+        case "link_entity": {
+          const { data: ent } = await db.from("entities").select("id, canonical_name").eq("user_id", userId).ilike("canonical_name", `%${cmd.entity_name}%`).limit(1).single();
+          const { data: cas } = await db.from("cases").select("id").eq("user_id", userId).eq("case_number", cmd.case_number).single();
+          if (!ent || !cas) { results.push("Entity or case not found"); break; }
+          const { error } = await db.from("case_entities").upsert({ case_id: cas.id, entity_id: ent.id, role: cmd.role || "related" }, { onConflict: "case_id,entity_id" });
+          results.push(error ? `Failed: ${error.message}` : `Linked "${ent.canonical_name}" to case #${cmd.case_number} (${cmd.role || "related"})`);
+          break;
+        }
+        case "unlink_entity": {
+          const { data: ent } = await db.from("entities").select("id").eq("user_id", userId).ilike("canonical_name", `%${cmd.entity_name}%`).limit(1).single();
+          const { data: cas } = await db.from("cases").select("id").eq("user_id", userId).eq("case_number", cmd.case_number).single();
+          if (!ent || !cas) { results.push("Entity or case not found"); break; }
+          await db.from("case_entities").delete().eq("case_id", cas.id).eq("entity_id", ent.id);
+          results.push(`Unlinked entity from case #${cmd.case_number}`);
+          break;
+        }
+        case "list_signals": {
+          let q = db.from("signals")
+            .select("id, sender_identifier, channel_identifier, status, occurred_at, raw_payload, case_id")
+            .eq("user_id", userId);
+          if (cmd.status) q = q.eq("status", cmd.status);
+          if (cmd.case_number) {
+            const { data: c } = await db.from("cases").select("id").eq("user_id", userId).eq("case_number", cmd.case_number).single();
+            if (c) q = q.eq("case_id", c.id);
+            else { results.push(`Case #${cmd.case_number} not found`); break; }
+          }
+          if (cmd.entity_name) {
+            const { data: ent } = await db.from("entities").select("id").eq("user_id", userId).ilike("canonical_name", `%${cmd.entity_name}%`).limit(1).single();
+            if (ent) {
+              const { data: sigIds } = await db.from("signal_entities").select("signal_id").eq("entity_id", ent.id);
+              if (sigIds?.length) q = q.in("id", sigIds.map(s => s.signal_id));
+              else { results.push("No signals for this entity"); break; }
+            }
+          }
+          q = q.order("occurred_at", { ascending: false }).limit(cmd.limit || 20);
+          const { data: sigList } = await q;
+          if (!sigList?.length) { results.push("No signals found"); break; }
+          const lines = sigList.map(s => {
+            const payload = s.raw_payload as Record<string, unknown> || {};
+            const content = (payload.content as string || "").slice(0, 100);
+            const sender = payload.sender_name || s.sender_identifier || "unknown";
+            return `[${s.occurred_at?.slice(0, 16)}] (${s.status}) ${sender}: ${content}`;
+          });
+          results.push(`Signals (${sigList.length}):\n${lines.join("\n")}`);
           break;
         }
         case "trigger_scan": {
@@ -562,20 +871,46 @@ Respond in the same language the user writes (Hebrew or English).
 You have FULL access to the system. You can see all open cases, entities, tasks, and signals.
 You answer questions about the system state, give updates, and take action when asked.
 
-ACTIONS — When the user asks you to do something, include a "commands" array in your JSON response:
+ACTIONS — Include a "commands" array in your JSON response. Available commands:
+
+CASES:
 - {"type":"create_case","title":"...","summary":"...","urgency":1-5,"importance":1-5}
 - {"type":"close_case","case_number":N}
-- {"type":"update_case","case_number":N,"status":"...","urgency":N,"importance":N,"summary":"..."}
+- {"type":"update_case","case_number":N,"status":"...","urgency":N,"importance":N,"summary":"...","title":"..."}
 - {"type":"merge_cases","from_number":N,"into_number":N,"reason":"..."}
-- {"type":"create_entity","name":"...","entity_type":"person|company|project","phone":"...","email":"...","telegram_handle":"..."}
-- {"type":"create_task","title":"...","case_number":N,"due_at":"ISO8601"}
-- {"type":"close_task","task_id":"uuid"}
+- {"type":"list_cases","status":"open|closed|active","search":"keyword","limit":N} — query cases. status "active" = all non-closed/merged
+- {"type":"get_case","case_number":N} — full case details: entities, signals, tasks, events
+
+ENTITIES:
+- {"type":"create_entity","name":"...","entity_type":"person|company|project|invoice|contract|product|bot|other","phone":"...","email":"...","telegram_handle":"..."}
+- {"type":"update_entity","name":"search name","entity_id":"uuid","canonical_name":"new name","entity_type":"...","phone":"...","email":"...","telegram_handle":"...","whatsapp_number":"...","website":"...","external_id":"..."} — find by name or entity_id, update any fields
+- {"type":"approve_entity","name":"..." or "entity_id":"uuid"} — activate a proposed entity
+- {"type":"reject_entity","name":"..." or "entity_id":"uuid"}
+- {"type":"merge_entities","source_name":"duplicate","target_name":"canonical","reason":"..."} — merge duplicate into target, move all links, archive source
+- {"type":"list_entities","entity_type":"person","status":"active|proposed|rejected|archived","search":"keyword","limit":N}
+- {"type":"get_entity","name":"..." or "entity_id":"uuid"} — full entity details: contacts, linked cases, recent signals
+- {"type":"link_entity","entity_name":"...","case_number":N,"role":"primary|related|mentioned"} — connect entity to case
+- {"type":"unlink_entity","entity_name":"...","case_number":N} — disconnect entity from case
+
+TASKS:
+- {"type":"create_task","title":"...","case_number":N,"due_at":"ISO8601","scheduled_at":"ISO8601","description":"..."}
+- {"type":"close_task","task_id":"uuid-prefix"}
+- {"type":"update_task","task_id":"uuid-prefix","title":"...","description":"...","due_at":"ISO8601","scheduled_at":"ISO8601"}
+- {"type":"reopen_task","task_id":"uuid-prefix"}
+- {"type":"list_tasks","status":"open|closed","case_number":N,"search":"keyword","limit":N}
+
+SIGNALS:
+- {"type":"list_signals","case_number":N,"entity_name":"...","status":"pending|processed|ignored","limit":N} — view signals by case or entity
+
+SCANNING:
 - {"type":"scan_case","case_number":N}
 - {"type":"trigger_scan"}
+
+MEDIA & SEARCH:
 - {"type":"web_search","query":"search query"} — search the internet for news, info, prices, anything
-- {"type":"generate_image","prompt":"detailed image description"} — generate an image with AI (Imagen)
-- {"type":"generate_video","prompt":"detailed video description"} — generate a short video with AI (Veo, takes ~1-2min)
-- {"type":"reply_voice","text":"what to say"} — reply with a voice message (TTS). Use when the user sent a voice message or asks for voice reply.
+- {"type":"generate_image","prompt":"detailed image description"} — generate an image with AI
+- {"type":"generate_video","prompt":"detailed video description"} — generate a short video with AI (takes ~1-2min)
+- {"type":"reply_voice","text":"what to say"} — reply with a voice message (TTS)
 
 RESPONSE FORMAT — Always return valid JSON:
 {
@@ -585,17 +920,19 @@ RESPONSE FORMAT — Always return valid JSON:
 
 RULES:
 - Be brief. This is Telegram, not email.
-- If the user asks about cases/entities/tasks, answer from the system state provided.
+- If the user asks about cases/entities/tasks, USE THE QUERY COMMANDS (list_cases, get_case, list_entities, get_entity, list_tasks, list_signals) to get FRESH data, then answer. The system state is a summary — use commands for details.
 - If asked to create/close/update/merge, DO IT via commands and confirm.
 - Scale: urgency/importance 1=critical, 5=minimal.
 - Don't ask for confirmation on simple ops — just do it and report.
-- For complex/destructive ops (merge, bulk close), confirm first.
+- For complex/destructive ops (merge entities, bulk close), confirm first.
+- Entity/task lookup by name is fuzzy (ILIKE %name%) — use partial names.
+- For task IDs: the system shows [8-char-prefix] — use that prefix, but note commands need the full UUID. If you only have a prefix, list_tasks first to find the full ID.
 - You can be proactive — suggest next steps, flag issues, recommend actions.
 - ALWAYS return valid JSON. No markdown, no code blocks, just JSON.
 - Messages prefixed with [Voice message] are transcriptions of voice notes — ALWAYS reply with reply_voice command so the user gets a voice reply back. Match the language they spoke in.
 - Use web_search when the user asks about news, prices, weather, current events, or anything you don't know.
-- You can chain multiple commands — e.g. search + create case based on results.
-- Set "continue" to true in your response if you need another iteration to complete the task (e.g. after a search, to analyze results and take action).
+- You can chain multiple commands — e.g. list + get + update in sequence.
+- Set "continue" to true when you need another iteration (e.g. list_entities to find ID, then update_entity with that ID).
 
 MULTI-STEP: If you need to do something that requires multiple steps (search then act, or check then decide), set "continue": true and the system will call you again with the results of your commands. You get up to 5 iterations.
 

@@ -295,3 +295,59 @@ Return ONLY valid JSON.`;
 
   return { response, raw, tokens, durationMs, skillsPulled: pulledNames };
 }
+
+// ─── CHED EVALUATION ────────────────────────────────────────────────────────
+
+export type ChedResponse = {
+  report: string;
+  commands: AgentCommand[];
+  reasoning: string;
+};
+
+export async function callChedAgent(
+  contextPrompt: string,
+  chedTitle: string,
+  chedContext: string,
+  systemState: string,
+  changesSummary?: string,
+): Promise<{ response: ChedResponse; raw: string; tokens: number; durationMs: number }> {
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    generationConfig: { responseMimeType: "application/json" },
+  });
+
+  const prompt = `${contextPrompt}
+
+---
+CHED (SCHEDULED CHECK) MODE
+
+You are running a scheduled check defined by the admin.
+
+CHECK TITLE: ${chedTitle}
+CHECK INSTRUCTIONS:
+${chedContext}
+
+CURRENT SYSTEM STATE:
+${systemState}
+${changesSummary ? `\nCHANGES THIS CYCLE:\n${changesSummary}\n` : ""}
+Current time: ${new Date().toISOString()}
+
+---
+Return JSON with:
+1. "report": Your findings/report text based on the check instructions. Be concise and actionable.
+2. "commands": Optional array of actions to take:
+   - {"type": "create_task", "title": "...", "description": "...", "scheduled_at": "ISO8601", "due_at": "ISO8601"}
+   - Only create tasks if the check instructions warrant action.
+3. "reasoning": Brief explanation of your analysis.
+
+Return ONLY valid JSON.`;
+
+  const startTime = Date.now();
+  const result = await model.generateContent(prompt);
+  const durationMs = Date.now() - startTime;
+  const raw = result.response.text();
+  const tokens = result.response.usageMetadata?.totalTokenCount || 0;
+  const response: ChedResponse = JSON.parse(raw);
+
+  return { response, raw, tokens, durationMs };
+}

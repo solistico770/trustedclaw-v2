@@ -1,5 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { callAgent, triageSignals, AgentCommand, Skill, TriageDecision } from "./gemini-agent";
+import { callAgent, triageSignals, callChedAgent, AgentCommand, Skill, TriageDecision } from "./gemini-agent";
 import { logAudit } from "./audit";
 import { getScanIntervalSeconds } from "./scan-intervals";
 import { buildBatchDossiers } from "./entity-dossier";
@@ -824,4 +824,119 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
   }
 
   return results;
+}
+
+// ─── CHED EVALUATION (Pass 3) ─────────────────────────────────────────────
+
+export type ChedEvalResult = {
+  ched_id: string;
+  report: string;
+  commands_executed: Array<{ type: string; status: string; detail?: string }>;
+  tokens: number;
+  duration_ms: number;
+  status: "success" | "failed";
+  error?: string;
+};
+
+export async function evaluateChed(
+  db: SupabaseClient,
+  ched: { id: string; title: string; context: string; trigger_type: string; interval_seconds?: number | null },
+  userId: string,
+  triggerReason: "scheduled" | "llm_change" | "manual",
+  changesSummary?: string,
+): Promise<ChedEvalResult> {
+  try {
+    // Build context prompt (same as case scan)
+    const { data: settings } = await db.from("user_settings").select("context_prompt, identity").eq("user_id", userId).single();
+    let contextPrompt = "";
+    const identity = (settings?.identity || {}) as Record<string, string>;
+    if (identity.name || identity.role || identity.business) {
+      const parts = [];
+      if (identity.name) parts.push(`Name: ${identity.name}`);
+      if (identity.role) parts.push(`Role: ${identity.role}`);
+      if (identity.business) parts.push(`Business: ${identity.business}`);
+      contextPrompt += `WHO I AM:\n${parts.join("\n")}\n\n`;
+    }
+    contextPrompt += settings?.context_prompt || "You are an operational agent.";
+
+    // Build system state summary
+    const [
+      { count: openCases },
+      { count: pendingSignals },
+      { count: actionNeeded },
+      { count: escalated },
+      { count: openTasks },
+    ] = await Promise.all([
+      db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).not("status", "in", '("closed","merged")'),
+      db.from("signals").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "pending"),
+      db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "action_needed"),
+      db.from("cases").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "escalated"),
+      db.from("tasks").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "open"),
+    ]);
+
+    const systemState = [
+      `Open cases: ${openCases || 0}`,
+      `Action needed: ${actionNeeded || 0}`,
+      `Escalated: ${escalated || 0}`,
+      `Pending signals: ${pendingSignals || 0}`,
+      `Open tasks: ${openTasks || 0}`,
+    ].join("\n");
+
+    const { response, raw, tokens, durationMs } = await callChedAgent(
+      contextPrompt, ched.title, ched.context, systemState, changesSummary,
+    );
+
+    // Execute any commands (only create_task for now — no case context)
+    const commandsExecuted: Array<{ type: string; status: string; detail?: string }> = [];
+    for (const cmd of response.commands || []) {
+      if (cmd.type === "create_task") {
+        const { data: task } = await db.from("tasks").insert({
+          user_id: userId, case_id: null, entity_id: null,
+          title: cmd.title, description: cmd.description || null,
+          scheduled_at: cmd.scheduled_at || null, due_at: cmd.due_at || null,
+        }).select("id").single();
+        commandsExecuted.push({ type: "create_task", status: "ok", detail: `${cmd.title} (${task?.id?.slice(0, 8)})` });
+      }
+    }
+
+    // Update ched state
+    const chedUpdate: Record<string, unknown> = {
+      last_run_at: new Date().toISOString(),
+      last_result: response.report,
+      updated_at: new Date().toISOString(),
+    };
+    if (ched.trigger_type === "interval" && ched.interval_seconds) {
+      chedUpdate.next_run_at = new Date(Date.now() + ched.interval_seconds * 1000).toISOString();
+    }
+    await db.from("cheds").update(chedUpdate).eq("id", ched.id);
+
+    // Log ched run
+    await db.from("ched_runs").insert({
+      ched_id: ched.id,
+      user_id: userId,
+      trigger_reason: triggerReason,
+      result_text: response.report,
+      commands_executed: commandsExecuted,
+      duration_ms: durationMs,
+    });
+
+    return {
+      ched_id: ched.id,
+      report: response.report,
+      commands_executed: commandsExecuted,
+      tokens,
+      duration_ms: durationMs,
+      status: "success",
+    };
+  } catch (err) {
+    return {
+      ched_id: ched.id,
+      report: "",
+      commands_executed: [],
+      tokens: 0,
+      duration_ms: 0,
+      status: "failed",
+      error: String(err),
+    };
+  }
 }

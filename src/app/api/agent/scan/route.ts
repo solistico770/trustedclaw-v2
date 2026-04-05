@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase-server";
-import { scanCase, triagePendingSignals, ScanCaseResult, TriageResult } from "@/lib/agent-scanner";
+import { scanCase, triagePendingSignals, evaluateChed, ScanCaseResult, TriageResult, ChedEvalResult } from "@/lib/agent-scanner";
 
 // Vercel Cron sends GET
 export async function GET(req: NextRequest) { return handleScan(req); }
@@ -92,6 +92,41 @@ async function handleScan(req: NextRequest) {
       if (Date.now() - startTime + 5000 >= MAX_RUNTIME_MS) break;
     }
 
+    // ─── CHED EVALUATION (Pass 3): run due cheds ─────────────────────────────
+    const chedsResults: ChedEvalResult[] = [];
+    const changesOccurred = totalTriaged > 0 || allResults.length > 0;
+
+    if (Date.now() - startTime < MAX_RUNTIME_MS - 5000) {
+      // Build changes summary for after_llm_change cheds
+      const changesSummary = changesOccurred
+        ? `Signals triaged: ${totalTriaged} (${totalAssigned} assigned, ${totalIgnored} ignored, ${totalCasesCreated} new cases). Cases scanned: ${allResults.length} (${casesMerged} merged).`
+        : undefined;
+
+      // Fetch interval cheds that are due
+      const { data: dueCheds } = await db.from("cheds")
+        .select("id, title, context, trigger_type, interval_seconds")
+        .eq("user_id", userId).eq("is_active", true)
+        .eq("trigger_type", "interval")
+        .lte("next_run_at", new Date().toISOString());
+
+      // Fetch after_llm_change cheds (only if changes occurred)
+      const afterChangeCheds = changesOccurred
+        ? (await db.from("cheds")
+            .select("id, title, context, trigger_type, interval_seconds")
+            .eq("user_id", userId).eq("is_active", true)
+            .eq("trigger_type", "after_llm_change")).data || []
+        : [];
+
+      const allDueCheds = [...(dueCheds || []), ...afterChangeCheds];
+
+      for (const ched of allDueCheds) {
+        if (Date.now() - startTime > MAX_RUNTIME_MS - 3000) break;
+        const triggerReason = ched.trigger_type === "after_llm_change" ? "llm_change" as const : "scheduled" as const;
+        const result = await evaluateChed(db, ched, userId, triggerReason, changesSummary);
+        chedsResults.push(result);
+      }
+    }
+
     const durationMs = Date.now() - startTime;
 
     // Save scan log
@@ -104,6 +139,7 @@ async function handleScan(req: NextRequest) {
       signals_assigned: totalAssigned,
       signals_ignored: totalIgnored,
       cases_created_from_triage: totalCasesCreated,
+      cheds_evaluated: chedsResults.length,
       duration_ms: durationMs,
       status: allResults.some(r => r.status === "failed") ? "partial_failure" : "success",
       error_message: allResults.filter(r => r.error).map(r => `${r.case_id.slice(0, 8)}: ${r.error}`).join("; ") || null,
@@ -117,6 +153,7 @@ async function handleScan(req: NextRequest) {
       cases_created: totalCasesCreated,
       cases_scanned: allResults.length,
       cases_merged: casesMerged,
+      cheds_evaluated: chedsResults.length,
       triage_tokens: totalTriageTokens,
       duration_ms: durationMs,
       mode: scanAll ? "all_open" : "due_only",
