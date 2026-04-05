@@ -3,6 +3,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const TG_API = "https://api.telegram.org/bot";
+const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 // ─── Telegram types ─────────────────────────────────────────────────────────
@@ -68,6 +69,39 @@ async function sendVideo(token: string, chatId: number, videoBuffer: Buffer, cap
   await fetch(`${TG_API}${token}/sendVideo`, { method: "POST", body: formData });
 }
 
+async function sendVoiceReply(token: string, chatId: number, text: string) {
+  const apiKey = process.env.GEMINI_API_KEY || "";
+  // Use Gemini TTS to generate speech
+  const res = await fetch(`${GEMINI_API_BASE}/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `Read this aloud naturally: ${text}` }] }],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } },
+      },
+    }),
+  });
+
+  const data = await res.json();
+  const audioPart = data.candidates?.[0]?.content?.parts?.find(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (p: any) => p.inlineData?.mimeType?.startsWith("audio/")
+  );
+
+  if (audioPart?.inlineData?.data) {
+    const audioBuffer = Buffer.from(audioPart.inlineData.data, "base64");
+    const formData = new FormData();
+    formData.append("chat_id", String(chatId));
+    formData.append("voice", new Blob([new Uint8Array(audioBuffer)], { type: "audio/ogg" }), "voice.ogg");
+    await fetch(`${TG_API}${token}/sendVoice`, { method: "POST", body: formData });
+  } else {
+    // Fallback: send as text
+    await sendMessage(token, chatId, text);
+  }
+}
+
 async function sendUploadAction(token: string, chatId: number, type: "upload_photo" | "upload_video") {
   await fetch(`${TG_API}${token}/sendChatAction`, {
     method: "POST",
@@ -116,8 +150,6 @@ async function transcribeVoice(token: string, fileId: string): Promise<string> {
 }
 
 // ─── Image generation (Imagen 3) ────────────────────────────────────────────
-
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 async function generateImage(prompt: string): Promise<Buffer> {
   const apiKey = process.env.GEMINI_API_KEY || "";
@@ -331,7 +363,8 @@ type BotCommand =
   | { type: "trigger_scan" }
   | { type: "web_search"; query: string }
   | { type: "generate_image"; prompt: string }
-  | { type: "generate_video"; prompt: string };
+  | { type: "generate_video"; prompt: string }
+  | { type: "reply_voice"; text: string };
 
 async function executeCommands(db: SupabaseClient, userId: string, commands: BotCommand[], tgToken?: string, chatId?: number): Promise<string[]> {
   const results: string[] = [];
@@ -476,6 +509,18 @@ async function executeCommands(db: SupabaseClient, userId: string, commands: Bot
           }
           break;
         }
+        case "reply_voice": {
+          if (!tgToken || !chatId) { results.push("Cannot send voice — no chat context"); break; }
+          try {
+            await sendVoiceReply(tgToken, chatId, cmd.text);
+            results.push("Sent voice reply");
+          } catch (e) {
+            // Fallback to text if TTS fails
+            if (tgToken && chatId) await sendMessage(tgToken, chatId, cmd.text);
+            results.push(`Voice failed, sent text instead: ${e instanceof Error ? e.message : "unknown"}`);
+          }
+          break;
+        }
       }
     } catch (err) {
       results.push(`Error: ${err instanceof Error ? err.message : "unknown"}`);
@@ -507,6 +552,7 @@ ACTIONS — When the user asks you to do something, include a "commands" array i
 - {"type":"web_search","query":"search query"} — search the internet for news, info, prices, anything
 - {"type":"generate_image","prompt":"detailed image description"} — generate an image with AI (Imagen)
 - {"type":"generate_video","prompt":"detailed video description"} — generate a short video with AI (Veo, takes ~1-2min)
+- {"type":"reply_voice","text":"what to say"} — reply with a voice message (TTS). Use when the user sent a voice message or asks for voice reply.
 
 RESPONSE FORMAT — Always return valid JSON:
 {
@@ -523,7 +569,7 @@ RULES:
 - For complex/destructive ops (merge, bulk close), confirm first.
 - You can be proactive — suggest next steps, flag issues, recommend actions.
 - ALWAYS return valid JSON. No markdown, no code blocks, just JSON.
-- Messages prefixed with [Voice message] are transcriptions of voice notes — treat them naturally.
+- Messages prefixed with [Voice message] are transcriptions of voice notes — ALWAYS reply with reply_voice command so the user gets a voice reply back. Match the language they spoke in.
 - Use web_search when the user asks about news, prices, weather, current events, or anything you don't know.
 - You can chain multiple commands — e.g. search + create case based on results.
 - Set "continue" to true in your response if you need another iteration to complete the task (e.g. after a search, to analyze results and take action).
