@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase-browser";
-import { LogOut, ChevronUp, Settings, Cpu, FlaskConical, UserCog, Send, Radio } from "lucide-react";
+import { LogOut, ChevronUp, Settings, Cpu, FlaskConical, UserCog, Send, Radio, Database } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import Link from "next/link";
 import {
@@ -15,6 +15,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 // Secondary nav items that don't belong in the main toolbar
 const secondaryNav = [
   { href: "/wa-control", label: "WA Control", icon: Radio },
+  { href: "/ec2-db", label: "EC2 Database", icon: Database },
   { href: "/simulate", label: "Simulate", icon: FlaskConical },
   { href: "/scan-monitor", label: "Scanner", icon: Cpu },
   { href: "/settings", label: "Settings", icon: Settings },
