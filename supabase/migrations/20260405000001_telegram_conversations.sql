@@ -9,7 +9,7 @@ create table if not exists telegram_messages (
 );
 
 -- Index for fetching recent context per chat
-create index idx_tg_messages_chat on telegram_messages(user_id, chat_id, created_at desc);
+create index if not exists idx_tg_messages_chat on telegram_messages(user_id, chat_id, created_at desc);
 
 -- RLS
 alter table telegram_messages enable row level security;

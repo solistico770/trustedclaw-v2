@@ -1,13 +1,14 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, ClipboardList, Radio, CheckSquare, Users } from "lucide-react";
+import { LayoutDashboard, ClipboardList, Radio, CheckSquare, Users, ClipboardCheck } from "lucide-react";
 
 const TABS = [
   { href: "/",         label: "Dashboard", icon: LayoutDashboard },
   { href: "/cases",    label: "Cases",     icon: ClipboardList },
   { href: "/signals",  label: "Signals",   icon: Radio },
   { href: "/tasks",    label: "Tasks",     icon: CheckSquare },
+  { href: "/cheds",    label: "Cheds",     icon: ClipboardCheck },
   { href: "/entities", label: "Entities",  icon: Users },
 ] as const;
 
