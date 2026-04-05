@@ -52,6 +52,30 @@ async function sendTyping(token: string, chatId: number) {
   });
 }
 
+async function sendPhoto(token: string, chatId: number, photoBuffer: Buffer, caption?: string) {
+  const formData = new FormData();
+  formData.append("chat_id", String(chatId));
+  formData.append("photo", new Blob([new Uint8Array(photoBuffer)], { type: "image/png" }), "image.png");
+  if (caption) formData.append("caption", caption);
+  await fetch(`${TG_API}${token}/sendPhoto`, { method: "POST", body: formData });
+}
+
+async function sendVideo(token: string, chatId: number, videoBuffer: Buffer, caption?: string) {
+  const formData = new FormData();
+  formData.append("chat_id", String(chatId));
+  formData.append("video", new Blob([new Uint8Array(videoBuffer)], { type: "video/mp4" }), "video.mp4");
+  if (caption) formData.append("caption", caption);
+  await fetch(`${TG_API}${token}/sendVideo`, { method: "POST", body: formData });
+}
+
+async function sendUploadAction(token: string, chatId: number, type: "upload_photo" | "upload_video") {
+  await fetch(`${TG_API}${token}/sendChatAction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, action: type }),
+  });
+}
+
 async function answerCallback(token: string, callbackId: string, text?: string) {
   await fetch(`${TG_API}${token}/answerCallbackQuery`, {
     method: "POST",
@@ -89,6 +113,100 @@ async function transcribeVoice(token: string, fileId: string): Promise<string> {
   ]);
 
   return result.response.text().trim();
+}
+
+// ─── Image generation (Imagen 3) ────────────────────────────────────────────
+
+const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+
+async function generateImage(prompt: string): Promise<Buffer> {
+  const apiKey = process.env.GEMINI_API_KEY || "";
+
+  // Use Gemini 2.0 Flash with image generation
+  const res = await fetch(`${GEMINI_API_BASE}/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
+      generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+    }),
+  });
+
+  const data = await res.json();
+
+  // Extract image from response parts
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    if (part.inlineData?.mimeType?.startsWith("image/")) {
+      return Buffer.from(part.inlineData.data, "base64");
+    }
+  }
+
+  throw new Error("No image generated — " + (data.error?.message || "model did not return an image"));
+}
+
+// ─── Video generation (Veo) ─────────────────────────────────────────────────
+
+async function generateVideo(prompt: string): Promise<Buffer> {
+  const apiKey = process.env.GEMINI_API_KEY || "";
+
+  // Start video generation (async operation)
+  const startRes = await fetch(`${GEMINI_API_BASE}/models/veo-2.0-generate-001:predictLongRunning?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      instances: [{ prompt }],
+      parameters: { aspectRatio: "16:9", durationSeconds: 5 },
+    }),
+  });
+
+  const startData = await startRes.json();
+
+  if (startData.error) {
+    throw new Error(startData.error.message || "Veo API error");
+  }
+
+  // Poll for completion
+  const opName = startData.name;
+  if (!opName) {
+    throw new Error("No operation name returned from Veo");
+  }
+
+  const maxWait = 120_000; // 2 minutes
+  const pollInterval = 5_000;
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWait) {
+    await new Promise(r => setTimeout(r, pollInterval));
+
+    const pollRes = await fetch(`${GEMINI_API_BASE}/${opName}?key=${apiKey}`);
+    const pollData = await pollRes.json();
+
+    if (pollData.done) {
+      // Extract video from response
+      const videoUri = pollData.response?.generatedSamples?.[0]?.video?.uri;
+      if (videoUri) {
+        // Download the video file
+        const videoRes = await fetch(`${videoUri}&key=${apiKey}`);
+        const videoBuffer = await videoRes.arrayBuffer();
+        return Buffer.from(videoBuffer);
+      }
+
+      // Try inline data
+      const b64 = pollData.response?.generatedSamples?.[0]?.video?.bytesBase64Encoded;
+      if (b64) {
+        return Buffer.from(b64, "base64");
+      }
+
+      throw new Error("Video generated but no data returned");
+    }
+
+    if (pollData.error) {
+      throw new Error(pollData.error.message || "Video generation failed");
+    }
+  }
+
+  throw new Error("Video generation timed out (2 min)");
 }
 
 // ─── System context builder ─────────────────────────────────────────────────
@@ -211,9 +329,11 @@ type BotCommand =
   | { type: "close_task"; task_id: string }
   | { type: "scan_case"; case_number: number }
   | { type: "trigger_scan" }
-  | { type: "web_search"; query: string };
+  | { type: "web_search"; query: string }
+  | { type: "generate_image"; prompt: string }
+  | { type: "generate_video"; prompt: string };
 
-async function executeCommands(db: SupabaseClient, userId: string, commands: BotCommand[]): Promise<string[]> {
+async function executeCommands(db: SupabaseClient, userId: string, commands: BotCommand[], tgToken?: string, chatId?: number): Promise<string[]> {
   const results: string[] = [];
 
   for (const cmd of commands) {
@@ -331,6 +451,31 @@ async function executeCommands(db: SupabaseClient, userId: string, commands: Bot
           }
           break;
         }
+        case "generate_image": {
+          if (!tgToken || !chatId) { results.push("Cannot send image — no chat context"); break; }
+          try {
+            await sendUploadAction(tgToken, chatId, "upload_photo");
+            const imgBuffer = await generateImage(cmd.prompt);
+            await sendPhoto(tgToken, chatId, imgBuffer, cmd.prompt.slice(0, 200));
+            results.push(`Generated image: "${cmd.prompt.slice(0, 80)}"`);
+          } catch (e) {
+            results.push(`Image generation failed: ${e instanceof Error ? e.message : "unknown"}`);
+          }
+          break;
+        }
+        case "generate_video": {
+          if (!tgToken || !chatId) { results.push("Cannot send video — no chat context"); break; }
+          try {
+            await sendUploadAction(tgToken, chatId, "upload_video");
+            await sendMessage(tgToken, chatId, `Generating video... this takes up to 2 minutes.`);
+            const vidBuffer = await generateVideo(cmd.prompt);
+            await sendVideo(tgToken, chatId, vidBuffer, cmd.prompt.slice(0, 200));
+            results.push(`Generated video: "${cmd.prompt.slice(0, 80)}"`);
+          } catch (e) {
+            results.push(`Video generation failed: ${e instanceof Error ? e.message : "unknown"}`);
+          }
+          break;
+        }
       }
     } catch (err) {
       results.push(`Error: ${err instanceof Error ? err.message : "unknown"}`);
@@ -360,6 +505,8 @@ ACTIONS — When the user asks you to do something, include a "commands" array i
 - {"type":"scan_case","case_number":N}
 - {"type":"trigger_scan"}
 - {"type":"web_search","query":"search query"} — search the internet for news, info, prices, anything
+- {"type":"generate_image","prompt":"detailed image description"} — generate an image with AI (Imagen)
+- {"type":"generate_video","prompt":"detailed video description"} — generate a short video with AI (Veo, takes ~1-2min)
 
 RESPONSE FORMAT — Always return valid JSON:
 {
@@ -501,7 +648,7 @@ async function processMessage(db: SupabaseClient, token: string, userId: string,
 
       // Execute commands
       if (commands.length > 0) {
-        const results = await executeCommands(db, userId, commands);
+        const results = await executeCommands(db, userId, commands, token, chatId);
         allCmdResults.push(...results);
       }
 
