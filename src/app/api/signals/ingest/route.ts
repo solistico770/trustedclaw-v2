@@ -97,9 +97,11 @@ export async function POST(req: NextRequest) {
       ? (metadata?.chat_name || rawSenderName)
       : rawSenderName;
 
-    // Deterministic sender ID: use stable JID (e.g. "972501234567@c.us") or phone, never display name
-    // This ensures the same person always maps to the same identifier for entity resolution
-    const stableSenderId = metadata?.sender_jid || metadata?.phone || sender_name || "Unknown";
+    // The CONTACT is the other person in the conversation — for entity resolution and grouping
+    // Incoming/group: contact = sender. Outgoing private: contact = recipient (chat_id).
+    // contact_jid is set by the forwarder — fall back to sender_jid for backward compat
+    const contactJid = metadata?.contact_jid || metadata?.sender_jid || "";
+    const stableSenderId = contactJid || metadata?.phone || sender_name || "Unknown";
 
     // Channel identifier: group name for groups, chat_name for private
     // WhatsApp multi-device uses LIDs (not real phones) for all JIDs, so chat_name
@@ -140,41 +142,43 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Failed to save signal" }, { status: 503 });
     }
 
-    // Auto-resolve sender to known entity — or auto-create if new
+    // Auto-resolve CONTACT to known entity — or auto-create if new
+    // CONTACT = the other person in the conversation (not necessarily the msg sender)
+    // For outgoing private msgs, contact = recipient. For incoming/group, contact = sender.
     let resolvedEntityId: string | null = null;
     try {
-      const senderJid = metadata?.sender_jid;
+      // Use contact_jid (the OTHER person) for entity resolution, not sender_jid (which is the user for outgoing)
+      const resolveJid = metadata?.contact_jid || metadata?.sender_jid;
       const tgUserId = metadata?.from?.id ? String(metadata.from.id) : null;
-      const isLid = !!(metadata?.is_lid) || (senderJid?.endsWith("@lid") ?? false);
-      // Don't trust metadata.phone for LID senders — it's often just the stripped LID number
-      const senderPhone = (!isLid && metadata?.phone) ? metadata.phone : null;
+      const isLid = !!(metadata?.is_lid) || (resolveJid?.endsWith("@lid") ?? false);
+      const contactPhone = metadata?.contact_phone || (!isLid && metadata?.phone ? metadata.phone : null);
       const gateTypeVal = gate_type || "generic";
 
       // 1. Try to find existing entity by stable ID
-      if (senderJid && (gateTypeVal === "whatsapp" || senderJid.includes("@"))) {
+      if (resolveJid && (gateTypeVal === "whatsapp" || resolveJid.includes("@"))) {
         const { data: entity } = await db.from("entities")
-          .select("id, canonical_name, phone, wa_jid").eq("user_id", user_id).eq("wa_jid", senderJid).limit(1).single();
+          .select("id, canonical_name, phone, wa_jid").eq("user_id", user_id).eq("wa_jid", resolveJid).limit(1).single();
         if (entity) {
           resolvedEntityId = entity.id;
           // Enrich entity if we now have better data (e.g. real name replacing LID)
           const updates: Record<string, string> = {};
           if (senderDisplayName !== "Unknown" && entity.canonical_name.includes("@")) updates.canonical_name = senderDisplayName;
-          const jidPhone = senderJid.match(/^(\d{10,15})@c\.us$/)?.[1] || null;
-          const bestPhone = senderPhone || jidPhone;
+          const jidPhone = resolveJid.match(/^(\d{10,15})@c\.us$/)?.[1] || null;
+          const bestPhone = contactPhone || jidPhone;
           if (bestPhone && !entity.phone) updates.phone = bestPhone;
           if (Object.keys(updates).length) {
             await db.from("entities").update(updates).eq("id", entity.id);
           }
         }
         // Fallback: @c.us JID with phone? Check if a @lid entity exists for the same phone → upgrade it
-        if (!entity && senderJid.endsWith("@c.us")) {
-          const phone = senderJid.match(/^(\d{10,15})@c\.us$/)?.[1];
+        if (!entity && resolveJid.endsWith("@c.us")) {
+          const phone = resolveJid.match(/^(\d{10,15})@c\.us$/)?.[1];
           if (phone) {
             const { data: lidEnt } = await db.from("entities")
               .select("id, canonical_name, wa_jid").eq("user_id", user_id).eq("phone", phone).limit(1).single();
             if (lidEnt && lidEnt.wa_jid?.endsWith("@lid")) {
               // Upgrade LID entity to real @c.us JID
-              const upgrades: Record<string, string> = { wa_jid: senderJid };
+              const upgrades: Record<string, string> = { wa_jid: resolveJid };
               if (senderDisplayName !== "Unknown" && lidEnt.canonical_name.includes("@")) upgrades.canonical_name = senderDisplayName;
               await db.from("entities").update(upgrades).eq("id", lidEnt.id);
               resolvedEntityId = lidEnt.id;
@@ -200,23 +204,27 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // 2. Auto-create entity for new senders (private AND group — skip status only)
+      // 2. Auto-create entity for the CONTACT (the other person, not the user)
       //    In groups, sender_jid identifies the individual person, not the group
-      if (!resolvedEntityId && !isStatus && (senderJid || tgUserId)) {
-        // Best name: display name > phone > JID/TG-ID
+      if (!resolvedEntityId && !isStatus && (resolveJid || tgUserId)) {
+        // Best name: display name > chat_name > phone > JID/TG-ID
         const tgFirst = metadata?.from?.first_name || null;
         const tgLast = metadata?.from?.last_name || null;
         const tgFullName = [tgFirst, tgLast].filter(Boolean).join(" ") || null;
-        const bestName = (senderDisplayName !== "Unknown" && senderDisplayName)
+        // For outgoing, use chat_name (recipient's name) since senderDisplayName is "ME → X"
+        const isOutgoingMsg = metadata?.direction === "outgoing";
+        const contactName = isOutgoingMsg ? (metadata?.chat_name || null) : null;
+        const bestName = contactName
+          || (senderDisplayName !== "Unknown" && !senderDisplayName.startsWith("ME →") && senderDisplayName)
           || tgFullName
-          || senderPhone
-          || (senderJid?.replace(/@.*/, ""))  // strip @c.us / @lid suffix
+          || contactPhone
+          || (resolveJid?.replace(/@.*/, ""))  // strip @c.us / @lid suffix
           || tgUserId
           || "Unknown";
 
-        // Extract phone from WA JID if it's phone-format (10-15 digits@c.us)
-        const jidPhone = senderJid?.match(/^(\d{10,15})@c\.us$/)?.[1] || null;
-        const bestPhone = senderPhone || jidPhone;
+        // Extract phone from resolve JID if it's phone-format (10-15 digits@c.us)
+        const jidPhone = resolveJid?.match(/^(\d{10,15})@c\.us$/)?.[1] || null;
+        const bestPhone = contactPhone || jidPhone;
 
         const insertData: Record<string, unknown> = {
           user_id,
@@ -224,7 +232,7 @@ export async function POST(req: NextRequest) {
           canonical_name: bestName,
           status: "active",
         };
-        if (senderJid) insertData.wa_jid = senderJid;
+        if (resolveJid) insertData.wa_jid = resolveJid;
         if (bestPhone) insertData.phone = bestPhone;
         if (tgUserId) insertData.tg_user_id = tgUserId;
         const tgHandle = metadata?.from?.username || null;
@@ -236,8 +244,8 @@ export async function POST(req: NextRequest) {
           resolvedEntityId = newEnt.id;
         } else if (entErr?.code === "23505") {
           // Unique constraint — concurrent insert race; re-fetch
-          const col = senderJid ? "wa_jid" : "tg_user_id";
-          const val = senderJid || tgUserId;
+          const col = resolveJid ? "wa_jid" : "tg_user_id";
+          const val = resolveJid || tgUserId;
           const { data: raced } = await db.from("entities")
             .select("id").eq("user_id", user_id).eq(col, val).limit(1).single();
           if (raced) resolvedEntityId = raced.id;
