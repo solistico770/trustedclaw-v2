@@ -71,27 +71,48 @@ async function sendVideo(token: string, chatId: number, videoBuffer: Buffer, cap
 
 async function sendVoiceReply(token: string, chatId: number, text: string) {
   const apiKey = process.env.GEMINI_API_KEY || "";
-  // Use Gemini TTS to generate speech
-  const res = await fetch(`${GEMINI_API_BASE}/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `Read this aloud naturally: ${text}` }] }],
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } },
-      },
-    }),
-  });
 
-  const data = await res.json();
-  const audioPart = data.candidates?.[0]?.content?.parts?.find(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (p: any) => p.inlineData?.mimeType?.startsWith("audio/")
-  );
+  // Try multiple TTS model options
+  const ttsModels = [
+    "gemini-2.5-flash-preview-tts",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+  ];
 
-  if (audioPart?.inlineData?.data) {
-    const audioBuffer = Buffer.from(audioPart.inlineData.data, "base64");
+  let audioBuffer: Buffer | null = null;
+
+  for (const model of ttsModels) {
+    try {
+      const res = await fetch(`${GEMINI_API_BASE}/models/${model}:generateContent?key=${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } },
+          },
+        }),
+      });
+
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const audioPart = data.candidates?.[0]?.content?.parts?.find((p: any) =>
+        p.inlineData?.mimeType?.startsWith("audio/")
+      );
+
+      if (audioPart?.inlineData?.data) {
+        audioBuffer = Buffer.from(audioPart.inlineData.data, "base64");
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  if (audioBuffer) {
     const formData = new FormData();
     formData.append("chat_id", String(chatId));
     formData.append("voice", new Blob([new Uint8Array(audioBuffer)], { type: "audio/ogg" }), "voice.ogg");
