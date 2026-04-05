@@ -170,32 +170,62 @@ async function transcribeVoice(token: string, fileId: string): Promise<string> {
   return result.response.text().trim();
 }
 
-// ─── Image generation (Imagen 3) ────────────────────────────────────────────
+// ─── Image generation ───────────────────────────────────────────────────────
 
 async function generateImage(prompt: string): Promise<Buffer> {
   const apiKey = process.env.GEMINI_API_KEY || "";
 
-  // Use Gemini 2.0 Flash with image generation
-  const res = await fetch(`${GEMINI_API_BASE}/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
-      generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-    }),
-  });
+  // Try multiple models for image generation
+  const imageModels = [
+    "gemini-2.0-flash-exp",
+    "gemini-2.0-flash",
+    "imagen-3.0-generate-001",
+  ];
 
-  const data = await res.json();
+  for (const modelName of imageModels) {
+    try {
+      const isImagen = modelName.startsWith("imagen");
 
-  // Extract image from response parts
-  const parts = data.candidates?.[0]?.content?.parts || [];
-  for (const part of parts) {
-    if (part.inlineData?.mimeType?.startsWith("image/")) {
-      return Buffer.from(part.inlineData.data, "base64");
+      if (isImagen) {
+        // Imagen uses a different API format
+        const res = await fetch(`${GEMINI_API_BASE}/models/${modelName}:predict?key=${apiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instances: [{ prompt }],
+            parameters: { sampleCount: 1 },
+          }),
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const b64 = data.predictions?.[0]?.bytesBase64Encoded;
+        if (b64) return Buffer.from(b64, "base64");
+      } else {
+        // Gemini native image generation
+        const res = await fetch(`${GEMINI_API_BASE}/models/${modelName}:generateContent?key=${apiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
+            generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+          }),
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const imgPart = data.candidates?.[0]?.content?.parts?.find((p: any) =>
+          p.inlineData?.mimeType?.startsWith("image/")
+        );
+        if (imgPart?.inlineData?.data) {
+          return Buffer.from(imgPart.inlineData.data, "base64");
+        }
+      }
+    } catch {
+      continue;
     }
   }
 
-  throw new Error("No image generated — " + (data.error?.message || "model did not return an image"));
+  throw new Error("Image generation failed — all models returned no image");
 }
 
 // ─── Video generation (Veo) ─────────────────────────────────────────────────
