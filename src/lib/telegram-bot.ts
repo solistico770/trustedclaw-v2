@@ -9,7 +9,8 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 type TgUser = { id: number; first_name: string; last_name?: string; username?: string };
 type TgChat = { id: number; type: string; title?: string; username?: string };
-type TgMessage = { message_id: number; from?: TgUser; chat: TgChat; text?: string; date: number };
+type TgVoice = { file_id: string; file_unique_id: string; duration: number; mime_type?: string; file_size?: number };
+type TgMessage = { message_id: number; from?: TgUser; chat: TgChat; text?: string; voice?: TgVoice; caption?: string; date: number };
 type TgCallbackQuery = { id: string; from: TgUser; message?: TgMessage; data?: string };
 export type TgUpdate = { update_id: number; message?: TgMessage; callback_query?: TgCallbackQuery };
 
@@ -57,6 +58,37 @@ async function answerCallback(token: string, callbackId: string, text?: string) 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ callback_query_id: callbackId, text }),
   });
+}
+
+// ─── Voice transcription ────────────────────────────────────────────────────
+
+async function transcribeVoice(token: string, fileId: string): Promise<string> {
+  // 1. Get file path from Telegram
+  const fileRes = await fetch(`${TG_API}${token}/getFile?file_id=${fileId}`);
+  const fileData = await fileRes.json();
+  if (!fileData.ok || !fileData.result?.file_path) {
+    throw new Error("Failed to get voice file path");
+  }
+
+  // 2. Download the audio file
+  const audioUrl = `https://api.telegram.org/file/bot${token}/${fileData.result.file_path}`;
+  const audioRes = await fetch(audioUrl);
+  const audioBuffer = await audioRes.arrayBuffer();
+  const base64Audio = Buffer.from(audioBuffer).toString("base64");
+
+  // 3. Transcribe with Gemini (supports audio natively)
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const result = await model.generateContent([
+    {
+      inlineData: {
+        mimeType: "audio/ogg",
+        data: base64Audio,
+      },
+    },
+    { text: "Transcribe this voice message exactly as spoken. Output ONLY the transcription, nothing else. If it's in Hebrew, keep it in Hebrew. If mixed languages, keep them as-is." },
+  ]);
+
+  return result.response.text().trim();
 }
 
 // ─── System context builder ─────────────────────────────────────────────────
@@ -178,7 +210,8 @@ type BotCommand =
   | { type: "create_task"; title: string; case_number?: number; due_at?: string }
   | { type: "close_task"; task_id: string }
   | { type: "scan_case"; case_number: number }
-  | { type: "trigger_scan" };
+  | { type: "trigger_scan" }
+  | { type: "web_search"; query: string };
 
 async function executeCommands(db: SupabaseClient, userId: string, commands: BotCommand[]): Promise<string[]> {
   const results: string[] = [];
@@ -283,6 +316,21 @@ async function executeCommands(db: SupabaseClient, userId: string, commands: Bot
           results.push(`Triggered scan for case #${cmd.case_number}`);
           break;
         }
+        case "web_search": {
+          try {
+            const searchModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+            const searchResult = await searchModel.generateContent({
+              contents: [{ role: "user", parts: [{ text: cmd.query }] }],
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              tools: [{ googleSearch: {} } as any],
+            });
+            const searchText = searchResult.response.text();
+            results.push(`Search results for "${cmd.query}":\n${searchText.slice(0, 1500)}`);
+          } catch (e) {
+            results.push(`Search failed: ${e instanceof Error ? e.message : "unknown"}`);
+          }
+          break;
+        }
       }
     } catch (err) {
       results.push(`Error: ${err instanceof Error ? err.message : "unknown"}`);
@@ -311,6 +359,7 @@ ACTIONS — When the user asks you to do something, include a "commands" array i
 - {"type":"close_task","task_id":"uuid"}
 - {"type":"scan_case","case_number":N}
 - {"type":"trigger_scan"}
+- {"type":"web_search","query":"search query"} — search the internet for news, info, prices, anything
 
 RESPONSE FORMAT — Always return valid JSON:
 {
@@ -326,13 +375,26 @@ RULES:
 - Don't ask for confirmation on simple ops — just do it and report.
 - For complex/destructive ops (merge, bulk close), confirm first.
 - You can be proactive — suggest next steps, flag issues, recommend actions.
-- ALWAYS return valid JSON. No markdown, no code blocks, just JSON.`;
+- ALWAYS return valid JSON. No markdown, no code blocks, just JSON.
+- Messages prefixed with [Voice message] are transcriptions of voice notes — treat them naturally.
+- Use web_search when the user asks about news, prices, weather, current events, or anything you don't know.
+- You can chain multiple commands — e.g. search + create case based on results.
+- Set "continue" to true in your response if you need another iteration to complete the task (e.g. after a search, to analyze results and take action).
+
+MULTI-STEP: If you need to do something that requires multiple steps (search then act, or check then decide), set "continue": true and the system will call you again with the results of your commands. You get up to 5 iterations.
+
+RESPONSE FORMAT:
+{
+  "reply": "message to user (shown after all iterations complete, or as progress update)",
+  "commands": [],
+  "continue": false  // set true if you need another iteration after commands execute
+}`;
 
 async function callBot(
   systemContext: string,
   conversationHistory: Array<{ role: string; content: string }>,
   userMessage: string,
-): Promise<{ reply: string; commands: BotCommand[] }> {
+): Promise<{ reply: string; commands: BotCommand[]; shouldContinue: boolean }> {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
     generationConfig: { responseMimeType: "application/json" },
@@ -360,10 +422,10 @@ async function callBot(
     return {
       reply: parsed.reply || raw,
       commands: Array.isArray(parsed.commands) ? parsed.commands : [],
+      shouldContinue: !!parsed.continue,
     };
   } catch {
-    // If JSON parsing fails, treat the whole response as the reply
-    return { reply: raw, commands: [] };
+    return { reply: raw, commands: [], shouldContinue: false };
   }
 }
 
@@ -384,43 +446,82 @@ export async function handleTelegramUpdate(update: TgUpdate, token: string, user
   }
 
   const msg = update.message;
-  if (!msg?.text || !msg.from) return;
+  if (!msg?.from) return;
 
+  // Handle voice messages — transcribe first
+  if (msg.voice) {
+    await sendTyping(token, msg.chat.id);
+    try {
+      const transcript = await transcribeVoice(token, msg.voice.file_id);
+      if (!transcript) {
+        await sendMessage(token, msg.chat.id, "Could not transcribe voice message.");
+        return;
+      }
+      await processMessage(db, token, userId, gateId, msg.chat.id, `[Voice message] ${transcript}`);
+    } catch (err) {
+      console.error("[telegram-bot] voice transcription error:", err);
+      await sendMessage(token, msg.chat.id, "Failed to process voice message.");
+    }
+    return;
+  }
+
+  if (!msg.text) return;
   await processMessage(db, token, userId, gateId, msg.chat.id, msg.text.trim());
 }
 
 async function processMessage(db: SupabaseClient, token: string, userId: string, _gateId: string, chatId: number, text: string) {
-  // Show typing indicator
   await sendTyping(token, chatId);
 
   try {
-    // Build full system context + conversation history in parallel
     const [systemContext, history] = await Promise.all([
       buildSystemContext(db, userId),
       getConversationHistory(db, userId, chatId),
     ]);
 
-    // Call LLM
-    const { reply, commands } = await callBot(systemContext, history, text);
+    // Save user message
+    await saveMessage(db, userId, chatId, "user", text);
 
-    // Execute any commands
-    let cmdResults: string[] = [];
-    if (commands.length > 0) {
-      cmdResults = await executeCommands(db, userId, commands);
+    // Agentic loop — up to 5 iterations
+    const MAX_ITERATIONS = 5;
+    let currentInput = text;
+    let finalReply = "";
+    let allCmdResults: string[] = [];
+
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
+      // Keep typing indicator alive
+      if (i > 0) await sendTyping(token, chatId);
+
+      const { reply, commands, shouldContinue } = await callBot(
+        systemContext,
+        [...history, ...allCmdResults.length > 0 ? [{ role: "assistant" as const, content: finalReply }, { role: "user" as const, content: `[System: command results]\n${allCmdResults.join("\n")}` }] : []],
+        currentInput,
+      );
+
+      finalReply = reply;
+
+      // Execute commands
+      if (commands.length > 0) {
+        const results = await executeCommands(db, userId, commands);
+        allCmdResults.push(...results);
+      }
+
+      // If the bot doesn't need another iteration, we're done
+      if (!shouldContinue || commands.length === 0) break;
+
+      // Feed results back for next iteration
+      currentInput = `[Previous step results]\n${allCmdResults.join("\n")}\n\nContinue with your plan.`;
     }
 
     // Build final message
-    let finalReply = reply;
-    if (cmdResults.length > 0) {
-      finalReply += "\n\n" + cmdResults.map(r => `✓ ${r}`).join("\n");
+    let output = finalReply;
+    if (allCmdResults.length > 0) {
+      output += "\n\n" + allCmdResults.map(r => `✓ ${r}`).join("\n");
     }
 
-    // Save conversation
-    await saveMessage(db, userId, chatId, "user", text);
-    await saveMessage(db, userId, chatId, "assistant", reply);
+    // Save assistant reply
+    await saveMessage(db, userId, chatId, "assistant", finalReply);
 
-    // Send response
-    await sendMessage(token, chatId, finalReply);
+    await sendMessage(token, chatId, output);
   } catch (err) {
     console.error("[telegram-bot]", err);
     await sendMessage(token, chatId, `Error: ${err instanceof Error ? err.message : "Something went wrong"}`);
