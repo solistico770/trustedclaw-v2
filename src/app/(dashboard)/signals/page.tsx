@@ -14,8 +14,9 @@ type Signal = {
   case_id: string | null;
   raw_payload: {
     content?: string; sender_name?: string; gate_type?: string;
-    phone?: string; direction?: "incoming" | "outgoing";
+    phone?: string; contact_phone?: string; direction?: "incoming" | "outgoing";
     is_group?: boolean; chat_name?: string; media_type?: string | null;
+    sender_jid?: string; contact_jid?: string; chat_id?: string;
   };
   sender_identifier: string;
   channel_identifier: string;
@@ -59,6 +60,19 @@ function timeAgo(iso: string) {
   const d = Math.round(h / 24);
   if (d < 7) return `${d}d`;
   return `${Math.round(d / 7)}w`;
+}
+
+function bestPhone(s: Signal): string {
+  const p = s.raw_payload;
+  return p.contact_phone || p.phone || "";
+}
+
+function formatPhone(phone: string): string {
+  if (!phone) return "";
+  // Already formatted
+  if (phone.includes("+") || phone.includes("-") || phone.includes(" ")) return phone;
+  // Raw digits — add + prefix
+  return `+${phone}`;
 }
 
 function initials(name: string) {
@@ -138,11 +152,14 @@ function SignalDetails({ signal }: { signal: Signal }) {
   const rows: [string, string][] = [
     ["Direction", p.direction || "—"],
     ["Sender", String(p.sender_name || "—")],
-    ["Phone", p.phone || "—"],
+    ["Phone", p.phone ? formatPhone(p.phone) : "—"],
+    ["Contact Phone", p.contact_phone ? formatPhone(p.contact_phone) : "—"],
+    ["Contact JID", p.contact_jid || "—"],
+    ["Sender JID", p.sender_jid || "—"],
     ["Channel", signal.channel_identifier || "—"],
     ["Sender ID", signal.sender_identifier || "—"],
-    ["Chat", String((p as Record<string, unknown>).chat_name || "—")],
-    ["Chat ID", String((p as Record<string, unknown>).chat_id || "—")],
+    ["Chat", String(p.chat_name || "—")],
+    ["Chat ID", String(p.chat_id || "—")],
     ["Type", p.is_group ? "Group" : (p as Record<string, unknown>).is_status ? "Status" : "Private"],
     ["Gate", String(p.gate_type || "—")],
     ["Media", p.media_type || "—"],
@@ -173,7 +190,10 @@ function MessageBubble({ signal, isLast }: { signal: Signal; isLast: boolean }) 
     <div className={`flex gap-2 ${isMe ? "flex-row-reverse" : ""}`}>
       <div className={`max-w-[85%] space-y-1 ${isMe ? "items-end" : ""}`}>
         {!isMe && p.sender_name && (
-          <span className="text-[11px] font-medium text-muted-foreground/80 ml-1">{p.sender_name}</span>
+          <span className="text-[11px] font-medium text-muted-foreground/80 ml-1">
+            {p.sender_name}
+            {bestPhone(signal) && <span className="text-muted-foreground/50 font-normal ml-1.5">{formatPhone(bestPhone(signal))}</span>}
+          </span>
         )}
         <div className={`rounded-xl px-3 py-2 text-sm border-l-2 ${st.border} ${isMe ? "bg-primary/5 dark:bg-primary/10 ml-auto" : "bg-muted/40"}`}>
           <p className="whitespace-pre-wrap break-words text-foreground/90 leading-relaxed">{p.content || "(no content)"}</p>
@@ -244,6 +264,10 @@ function ConversationRow({ conv, isOpen, onToggle }: { conv: Conversation; isOpe
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-foreground truncate">{conv.label}</span>
+            {(() => {
+              const phone = bestPhone(lastSignal);
+              return phone ? <span className="text-[11px] text-muted-foreground/60 font-mono shrink-0">{formatPhone(phone)}</span> : null;
+            })()}
             {conv.isGroup && (
               <Badge className="text-[9px] px-1.5 py-0 bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400 border-0">
                 Group
@@ -277,7 +301,7 @@ function ConversationRow({ conv, isOpen, onToggle }: { conv: Conversation; isOpe
       {isOpen && (
         <div className="border-t border-border/30 px-4 py-3">
           {/* Conversation metadata */}
-          <div className="flex items-center gap-3 mb-3 text-[11px] text-muted-foreground/70">
+          <div className="flex items-center gap-3 mb-3 text-[11px] text-muted-foreground/70 flex-wrap">
             <span>{conv.gateName}</span>
             <span className="text-border">|</span>
             <span>{conv.signals.length} message{conv.signals.length !== 1 ? "s" : ""}</span>
@@ -289,6 +313,17 @@ function ConversationRow({ conv, isOpen, onToggle }: { conv: Conversation; isOpe
                 <span className="text-primary">linked to case</span>
               </>
             )}
+            {(() => {
+              const p = lastSignal?.raw_payload;
+              const phone = bestPhone(lastSignal);
+              const contactJid = p?.contact_jid || p?.sender_jid || lastSignal?.sender_identifier || "";
+              return (
+                <>
+                  {phone && <><span className="text-border">|</span><span className="font-mono">{formatPhone(phone)}</span></>}
+                  {contactJid && <><span className="text-border">|</span><span className="font-mono text-[10px]">{contactJid}</span></>}
+                </>
+              );
+            })()}
           </div>
 
           {/* Messages thread — chronological (oldest first) */}
