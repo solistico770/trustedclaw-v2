@@ -170,76 +170,46 @@ async function transcribeVoice(token: string, fileId: string): Promise<string> {
   return result.response.text().trim();
 }
 
-// ─── Image generation ───────────────────────────────────────────────────────
+// ─── Image generation (Nano Banana / gemini-2.5-flash-image) ────────────────
 
 async function generateImage(prompt: string): Promise<Buffer> {
-  const apiKey = process.env.GEMINI_API_KEY || "";
+  // Nano Banana = gemini-2.5-flash-image — native image generation
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash-image",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    generationConfig: { responseModalities: ["TEXT", "IMAGE"] } as any,
+  });
 
-  // Try multiple models for image generation
-  const imageModels = [
-    "gemini-2.0-flash-exp",
-    "gemini-2.0-flash",
-    "imagen-3.0-generate-001",
-  ];
+  const result = await model.generateContent(`Generate an image: ${prompt}`);
+  const parts = result.response.candidates?.[0]?.content?.parts || [];
 
-  for (const modelName of imageModels) {
-    try {
-      const isImagen = modelName.startsWith("imagen");
-
-      if (isImagen) {
-        // Imagen uses a different API format
-        const res = await fetch(`${GEMINI_API_BASE}/models/${modelName}:predict?key=${apiKey}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            instances: [{ prompt }],
-            parameters: { sampleCount: 1 },
-          }),
-        });
-        if (!res.ok) continue;
-        const data = await res.json();
-        const b64 = data.predictions?.[0]?.bytesBase64Encoded;
-        if (b64) return Buffer.from(b64, "base64");
-      } else {
-        // Gemini native image generation
-        const res = await fetch(`${GEMINI_API_BASE}/models/${modelName}:generateContent?key=${apiKey}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
-            generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-          }),
-        });
-        if (!res.ok) continue;
-        const data = await res.json();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const imgPart = data.candidates?.[0]?.content?.parts?.find((p: any) =>
-          p.inlineData?.mimeType?.startsWith("image/")
-        );
-        if (imgPart?.inlineData?.data) {
-          return Buffer.from(imgPart.inlineData.data, "base64");
-        }
-      }
-    } catch {
-      continue;
+  for (const part of parts) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const inlineData = (part as any).inlineData;
+    if (inlineData?.mimeType?.startsWith("image/") && inlineData?.data) {
+      return Buffer.from(inlineData.data, "base64");
     }
   }
 
-  throw new Error("Image generation failed — all models returned no image");
+  throw new Error("Nano Banana returned no image");
 }
 
-// ─── Video generation (Veo) ─────────────────────────────────────────────────
+// ─── Video generation (Veo 2.0) ─────────────────────────────────────────────
 
 async function generateVideo(prompt: string): Promise<Buffer> {
   const apiKey = process.env.GEMINI_API_KEY || "";
 
-  // Start video generation (async operation)
-  const startRes = await fetch(`${GEMINI_API_BASE}/models/veo-2.0-generate-001:predictLongRunning?key=${apiKey}`, {
+  // Veo uses generateVideos endpoint (async)
+  const startRes = await fetch(`${GEMINI_API_BASE}/models/veo-2.0-generate-001:generateVideos?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      instances: [{ prompt }],
-      parameters: { aspectRatio: "16:9", durationSeconds: 5 },
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        numberOfVideos: 1,
+        durationSeconds: 5,
+        aspectRatio: "16:9",
+      },
     }),
   });
 
@@ -249,36 +219,38 @@ async function generateVideo(prompt: string): Promise<Buffer> {
     throw new Error(startData.error.message || "Veo API error");
   }
 
-  // Poll for completion
+  // Async operation — poll for completion
   const opName = startData.name;
   if (!opName) {
+    // Maybe it returned inline (short videos)
+    const video = startData.generatedVideos?.[0]?.video;
+    if (video?.bytesBase64Encoded) {
+      return Buffer.from(video.bytesBase64Encoded, "base64");
+    }
     throw new Error("No operation name returned from Veo");
   }
 
-  const maxWait = 120_000; // 2 minutes
+  const maxWait = 120_000;
   const pollInterval = 5_000;
   const startTime = Date.now();
 
   while (Date.now() - startTime < maxWait) {
     await new Promise(r => setTimeout(r, pollInterval));
 
-    const pollRes = await fetch(`${GEMINI_API_BASE}/${opName}?key=${apiKey}`);
+    const pollRes = await fetch(`${GEMINI_API_BASE}/operations/${opName}?key=${apiKey}`);
     const pollData = await pollRes.json();
 
     if (pollData.done) {
-      // Extract video from response
-      const videoUri = pollData.response?.generatedSamples?.[0]?.video?.uri;
-      if (videoUri) {
-        // Download the video file
-        const videoRes = await fetch(`${videoUri}&key=${apiKey}`);
-        const videoBuffer = await videoRes.arrayBuffer();
-        return Buffer.from(videoBuffer);
+      const video = pollData.response?.generatedVideos?.[0]?.video;
+
+      if (video?.uri) {
+        const sep = video.uri.includes("?") ? "&" : "?";
+        const videoRes = await fetch(`${video.uri}${sep}key=${apiKey}`);
+        return Buffer.from(await videoRes.arrayBuffer());
       }
 
-      // Try inline data
-      const b64 = pollData.response?.generatedSamples?.[0]?.video?.bytesBase64Encoded;
-      if (b64) {
-        return Buffer.from(b64, "base64");
+      if (video?.bytesBase64Encoded) {
+        return Buffer.from(video.bytesBase64Encoded, "base64");
       }
 
       throw new Error("Video generated but no data returned");
