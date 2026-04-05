@@ -122,8 +122,48 @@
     }
   body {
     @apply bg-background text-foreground;
+    font-size: 13px;
     }
   html {
     @apply font-sans;
     }
+  html, body {
+    overflow: hidden;
+    height: 100dvh;
+    }
+
+  /* Density utilities */
+  .text-secondary { font-size: 11px; }
+  .text-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+
+  /* Glass morphism panel */
+  .glass-panel {
+    background: oklch(0.27 0.012 250 / 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+  :root .glass-panel {
+    background: oklch(1 0 0 / 0.85);
+  }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Animation & spacing tokens */
+:root {
+  --duration-fast: 100ms;
+  --duration-normal: 200ms;
+  --duration-slow: 350ms;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --space-row: 8px;
+  --space-cell: 6px 12px;
+  --space-section: 16px;
 }

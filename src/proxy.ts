@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 const publicPaths = ["/login", "/auth/callback", "/waiting", "/reset-password"];
-const apiPublicPaths = ["/api/messages/ingest", "/api/signals/ingest", "/api/agent/scan", "/api/gates", "/api/listener"];
+const apiPublicPaths = ["/api/messages/ingest", "/api/signals/ingest", "/api/agent/scan", "/api/gates", "/api/listener", "/api/telegram/webhook"];
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;

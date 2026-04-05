@@ -90,7 +90,12 @@ export async function POST(req: NextRequest) {
 
     // Build rich context for signal display
     const groupName = isGroup ? (metadata?.group_name || metadata?.chat_name || body.channel_name || null) : null;
-    const senderDisplayName = metadata?.sender_name || sender_name || "Unknown";
+    // For backfill messages, sender_name may be a raw LID — use chat_name for private chats as fallback
+    const rawSenderName = metadata?.sender_name || sender_name || "Unknown";
+    const senderIsLid = rawSenderName.includes("@lid") || rawSenderName.includes("@c.us");
+    const senderDisplayName = senderIsLid && !isGroup
+      ? (metadata?.chat_name || rawSenderName)
+      : rawSenderName;
 
     // Deterministic sender ID: use stable JID (e.g. "972501234567@c.us") or phone, never display name
     // This ensures the same person always maps to the same identifier for entity resolution
@@ -140,18 +145,59 @@ export async function POST(req: NextRequest) {
     try {
       const senderJid = metadata?.sender_jid;
       const tgUserId = metadata?.from?.id ? String(metadata.from.id) : null;
-      const senderPhone = metadata?.phone || null;
+      const isLid = !!(metadata?.is_lid) || (senderJid?.endsWith("@lid") ?? false);
+      // Don't trust metadata.phone for LID senders — it's often just the stripped LID number
+      const senderPhone = (!isLid && metadata?.phone) ? metadata.phone : null;
       const gateTypeVal = gate_type || "generic";
 
       // 1. Try to find existing entity by stable ID
       if (senderJid && (gateTypeVal === "whatsapp" || senderJid.includes("@"))) {
         const { data: entity } = await db.from("entities")
-          .select("id").eq("user_id", user_id).eq("wa_jid", senderJid).limit(1).single();
-        if (entity) resolvedEntityId = entity.id;
+          .select("id, canonical_name, phone, wa_jid").eq("user_id", user_id).eq("wa_jid", senderJid).limit(1).single();
+        if (entity) {
+          resolvedEntityId = entity.id;
+          // Enrich entity if we now have better data (e.g. real name replacing LID)
+          const updates: Record<string, string> = {};
+          if (senderDisplayName !== "Unknown" && entity.canonical_name.includes("@")) updates.canonical_name = senderDisplayName;
+          const jidPhone = senderJid.match(/^(\d{10,15})@c\.us$/)?.[1] || null;
+          const bestPhone = senderPhone || jidPhone;
+          if (bestPhone && !entity.phone) updates.phone = bestPhone;
+          if (Object.keys(updates).length) {
+            await db.from("entities").update(updates).eq("id", entity.id);
+          }
+        }
+        // Fallback: @c.us JID with phone? Check if a @lid entity exists for the same phone → upgrade it
+        if (!entity && senderJid.endsWith("@c.us")) {
+          const phone = senderJid.match(/^(\d{10,15})@c\.us$/)?.[1];
+          if (phone) {
+            const { data: lidEnt } = await db.from("entities")
+              .select("id, canonical_name, wa_jid").eq("user_id", user_id).eq("phone", phone).limit(1).single();
+            if (lidEnt && lidEnt.wa_jid?.endsWith("@lid")) {
+              // Upgrade LID entity to real @c.us JID
+              const upgrades: Record<string, string> = { wa_jid: senderJid };
+              if (senderDisplayName !== "Unknown" && lidEnt.canonical_name.includes("@")) upgrades.canonical_name = senderDisplayName;
+              await db.from("entities").update(upgrades).eq("id", lidEnt.id);
+              resolvedEntityId = lidEnt.id;
+            }
+          }
+        }
       } else if (tgUserId && gateTypeVal === "telegram") {
         const { data: entity } = await db.from("entities")
-          .select("id").eq("user_id", user_id).eq("tg_user_id", tgUserId).limit(1).single();
-        if (entity) resolvedEntityId = entity.id;
+          .select("id, canonical_name").eq("user_id", user_id).eq("tg_user_id", tgUserId).limit(1).single();
+        if (entity) {
+          resolvedEntityId = entity.id;
+          // Enrich TG entity name if we have a better one
+          const tgFirst = metadata?.from?.first_name || null;
+          const tgLast = metadata?.from?.last_name || null;
+          const tgName = [tgFirst, tgLast].filter(Boolean).join(" ");
+          if (tgName && /^\d+$/.test(entity.canonical_name)) {
+            await db.from("entities").update({ canonical_name: tgName }).eq("id", entity.id);
+          }
+          const tgHandle = metadata?.from?.username || null;
+          if (tgHandle) {
+            await db.from("entities").update({ telegram_handle: tgHandle }).eq("id", entity.id);
+          }
+        }
       }
 
       // 2. Auto-create entity for new senders (private AND group — skip status only)

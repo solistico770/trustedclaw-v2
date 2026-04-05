@@ -10,7 +10,7 @@ export type AgentCommand =
   | { type: "set_summary"; value: string }
   | { type: "set_next_scan"; value: string }
   | { type: "set_empowerment_line"; value: string }
-  | { type: "create_entity"; name: string; entity_type: string; role: string; phone?: string; email?: string; whatsapp_number?: string; telegram_handle?: string }
+  | { type: "create_entity"; name: string; entity_type: string; role: string; phone?: string; email?: string; whatsapp_number?: string; telegram_handle?: string; wa_jid?: string; tg_user_id?: string }
   | { type: "attach_entity"; entity_id?: string; name?: string; role: string }
   | { type: "propose_entity"; name: string; entity_type: string; role: string } // backward compat
   | { type: "merge_into"; target_case_id: string; reason: string }
@@ -55,17 +55,20 @@ export type TriageResponse = {
 
 export async function triageSignals(
   contextPrompt: string,
-  signals: Array<{ id: string; sender: string; content: string; gate_type: string; timestamp: string }>,
+  signals: Array<{ id: string; sender_id: string; sender_name: string; content: string; gate_type: string; is_group?: boolean; group_name?: string | null; timestamp: string }>,
   openCases: Array<{ id: string; case_number?: number; title: string; summary: string; importance: number; signal_count?: number; first_signal?: string | null; first_sender?: string | null }>,
+  entityDossiers?: string,
 ): Promise<{ response: TriageResponse; raw: string; tokens: number; durationMs: number }> {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
     generationConfig: { responseMimeType: "application/json" },
   });
 
-  const signalsText = signals.map((s, i) =>
-    `[Signal ${i + 1}] id=${s.id} | ${s.timestamp} | gate=${s.gate_type} | ${s.sender}: ${s.content}`
-  ).join("\n");
+  // Format: stable sender_id for entity matching + display name for context
+  const signalsText = signals.map((s, i) => {
+    const groupTag = s.is_group && s.group_name ? ` [group: ${s.group_name}]` : "";
+    return `[Signal ${i + 1}] id=${s.id} | ${s.timestamp} | gate=${s.gate_type} | from=${s.sender_id} (${s.sender_name})${groupTag}: ${s.content}`;
+  }).join("\n");
 
   const casesText = openCases.length > 0
     ? openCases.map(c => {
@@ -87,7 +90,7 @@ ${signalsText}
 
 EXISTING OPEN CASES:
 ${casesText}
-
+${entityDossiers ? `\nKNOWN ENTITIES IN THIS BATCH:\n${entityDossiers}\n` : ""}
 ---
 For each signal, decide ONE action:
 
@@ -96,7 +99,7 @@ For each signal, decide ONE action:
    - "title": clear Hebrew/English title (what is this about)
    - "summary": 1-2 sentence description
    - "urgency": 1-5 (1=immediate action needed, 5=routine)
-   - "importance": 1-5 (1=critical business impact, 5=minimal)
+   - "importance": 1-5 (1=critical life/business impact, 5=minimal/noise)
    - "entities": array of people/companies mentioned: [{"name":"שם","type":"person","role":"primary","phone":"972..."}]
    - "group_key": if multiple signals belong to same new case, use same group_key
 3. "ignore" — ONLY for: spam, bot messages, empty forwards, system notifications, or pure emoji/sticker messages.
@@ -112,14 +115,20 @@ Return JSON:
 }
 
 TRIAGE RULES:
-- EVERY conversation that involves a real person talking about something real → create_case or assign.
-- A case = any topic worth remembering: a request, info, question, update, payment, delivery, meeting, complaint, etc.
+- You are reading someone's REAL LIFE — understand context before deciding.
+- FIRST classify: is this PERSONAL or BUSINESS?
+  - Business: client/supplier/partner/work conversations → create_case if substantive
+  - Personal: friends/family/social → ONLY create_case if significant (commitment, health, money, conflict)
+  - Personal noise (memes, jokes, banter, "good morning" blasts, group reactions) → IGNORE
+- A case = something worth TRACKING — not every message deserves one.
 - Group signals from the SAME sender or SAME topic into ONE case using group_key.
+- The "from" field is a STABLE IDENTIFIER (WA JID like "972501234567@c.us" or "33436521762932@lid"). Same from = same person, ALWAYS. Use this to match entities across signals.
+- The name in parentheses is the display name — use it for the entity name, but match by the stable ID.
 - Check existing cases before creating new ones — assign if the topic matches.
-- Extract entities (people, companies, projects) with whatever contact info is available (phone, WA number, name).
-- Direction "ME→" means the owner sent it — still relevant, assign or create case if it's about something.
-- ONLY ignore actual noise: automated notifications, empty messages, pure emojis, spam, bot messages.
-- When in doubt, CREATE A CASE — it's better to track than to miss.
+- Extract entities (people, companies, projects) with whatever contact info is available. For phone: extract digits from the stable ID if it looks like a phone number (e.g. "972501234567@c.us" → phone "972501234567").
+- Direction "ME→" means the owner sent it — still relevant, assign or create case if it's about something substantive.
+- IGNORE liberally: group chat banter, memes, forwarded jokes/news, social pleasantries, stickers, reactions, "lol", "+1", greetings with no ask.
+- When in doubt about personal messages → IGNORE. When in doubt about business messages → CREATE.
 - Every signal_id MUST appear in decisions.
 
 Return ONLY valid JSON.`;
@@ -138,20 +147,21 @@ Return ONLY valid JSON.`;
 
 export async function callAgent(
   contextPrompt: string,
-  signals: Array<{ sender: string; content: string; timestamp: string }>,
+  signals: Array<{ sender_id: string; sender_name: string; content: string; timestamp: string }>,
   openCases: Array<{ id: string; case_number?: number; title: string; summary: string; importance: number; message_count: number; first_message?: string | null; first_sender?: string | null }>,
   skills: Skill[],
   pulledSkillInstructions: string[],
   existingEntityNames: string[],
   previousSummary?: string,
   openTasks?: Array<{ id: string; title: string; scheduled_at?: string | null; due_at?: string | null }>,
+  entityDossiers?: string,
 ): Promise<{ response: AgentResponse; raw: string; tokens: number; durationMs: number; skillsPulled: string[] }> {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
     generationConfig: { responseMimeType: "application/json" },
   });
 
-  const signalsText = signals.map((m, i) => `[${i + 1}] ${m.timestamp} | ${m.sender}: ${m.content}`).join("\n");
+  const signalsText = signals.map((m, i) => `[${i + 1}] ${m.timestamp} | from=${m.sender_id} (${m.sender_name}): ${m.content}`).join("\n");
   const casesText = openCases.length > 0
     ? openCases.map(c => {
         const title = c.title || "(untitled)";
@@ -172,18 +182,28 @@ export async function callAgent(
       }).join("\n")}`
     : "";
 
-  // Build skill map
-  const skillMap = skills.filter(s => s.auto_attach || s.summary).map(s =>
-    `- SKILL "${s.name}": ${s.summary}${s.auto_attach ? " [AUTO-ATTACHED]" : " [PULL with pull_skill command if needed]"}`
-  ).join("\n");
+  // Build skill map — show trigger conditions and suggestions for pull-on-demand skills
+  const skillMap = skills.filter(s => !s.auto_attach && s.summary).map(s => {
+    // Extract "SUGGESTS: x" from instructions if present
+    const suggestsMatch = s.instructions.match(/SUGGESTS:\s*(.+)/);
+    const suggests = suggestsMatch ? ` Suggests: ${suggestsMatch[1].trim()}` : "";
+    return `- SKILL "${s.name}" [${s.summary}]${suggests}`;
+  }).join("\n");
 
   const activeSkillInstructions = pulledSkillInstructions.length > 0
     ? `\n\n--- ACTIVE SKILL INSTRUCTIONS ---\n${pulledSkillInstructions.join("\n\n---\n\n")}`
     : "";
 
-  const autoAttachInstructions = skills.filter(s => s.auto_attach).map(s =>
+  const autoAttachSkills = skills.filter(s => s.auto_attach);
+  const autoAttachInstructions = autoAttachSkills.map(s =>
     `--- SKILL: ${s.name} ---\n${s.instructions}`
   ).join("\n\n");
+
+  // Token budget monitoring
+  const autoAttachChars = autoAttachSkills.reduce((sum, s) => sum + s.instructions.length, 0);
+  if (autoAttachChars > 4800) {
+    console.warn(`[gemini-agent] Auto-attach skill chars: ${autoAttachChars} (exceeds 4800 budget, ~${Math.round(autoAttachChars / 4)} tokens)`);
+  }
 
   const prompt = `${contextPrompt}
 
@@ -197,6 +217,7 @@ ${skillMap || "No skills defined."}
 CASE SIGNALS:
 ${signalsText}
 ${existingEntitiesText}
+${entityDossiers ? `\nENTITY DOSSIERS:\n${entityDossiers}` : ""}
 ${tasksText}
 
 ${previousSummary ? `PREVIOUS ANALYSIS:\n${previousSummary}\n` : ""}

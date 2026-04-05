@@ -2,6 +2,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { callAgent, triageSignals, AgentCommand, Skill, TriageDecision } from "./gemini-agent";
 import { logAudit } from "./audit";
 import { getScanIntervalSeconds } from "./scan-intervals";
+import { buildBatchDossiers } from "./entity-dossier";
 
 // ─── TRIAGE TYPES ───────────────────────────────────────────────────────────
 
@@ -83,16 +84,30 @@ export async function triagePendingSignals(db: SupabaseClient, userId: string): 
     contextPrompt += settings?.context_prompt || "You are an operational agent.";
 
     // Build signal input for AI
+    // sender_identifier is the stable JID (deterministic), sender_name is the display name (human-readable)
+    // Both are provided so the LLM can match entities by stable ID and understand context by name
     const signalInput = pendingSignals.map(s => ({
       id: s.id,
-      sender: s.sender_identifier || "Unknown",
+      sender_id: s.sender_identifier || "Unknown",
+      sender_name: s.raw_payload?.sender_name || s.sender_identifier || "Unknown",
       content: s.raw_payload?.content || JSON.stringify(s.raw_payload),
       gate_type: (s.gates as unknown as { type: string } | null)?.type || "unknown",
+      is_group: !!s.raw_payload?.is_group,
+      group_name: s.raw_payload?.group_name || null,
       timestamp: s.occurred_at,
     }));
 
+    // Collect auto-resolved entity IDs from signal_entities for this batch
+    const { data: batchEntityLinks } = await db.from("signal_entities")
+      .select("signal_id, entity_id")
+      .in("signal_id", claimedIds);
+    const resolvedEntityIds = [...new Set((batchEntityLinks || []).map(l => l.entity_id))];
+    const entityDossiersText = resolvedEntityIds.length > 0
+      ? await buildBatchDossiers(db, resolvedEntityIds)
+      : "";
+
     // Call AI triage
-    const { response, raw, tokens, durationMs } = await triageSignals(contextPrompt, signalInput, openCases);
+    const { response, raw, tokens, durationMs } = await triageSignals(contextPrompt, signalInput, openCases, entityDossiersText);
 
     // Execute decisions
     const result = await executeTriageDecisions(db, userId, response.decisions, pendingSignals, settings?.admin_entity_id);
@@ -202,28 +217,51 @@ async function executeTriageDecisions(
               for (const ent of decision.entities) {
                 if (!ent.name || ent.name.length < 2) continue;
                 try {
-                  // Check if entity already exists
-                  const { data: existing } = await db.from("entities")
-                    .select("id").eq("user_id", userId).ilike("canonical_name", ent.name).limit(1).single();
-                  if (existing) {
+                  // Extract wa_jid from phone if available
+                  const entWaJid = ent.phone ? `${ent.phone}@c.us` : null;
+                  let entEntityId: string | null = null;
+
+                  // Check by wa_jid first, then name
+                  if (entWaJid) {
+                    const { data: byJid } = await db.from("entities")
+                      .select("id").eq("user_id", userId).eq("wa_jid", entWaJid).limit(1).single();
+                    if (byJid) entEntityId = byJid.id;
+                  }
+                  if (!entEntityId) {
+                    const { data: byName } = await db.from("entities")
+                      .select("id").eq("user_id", userId).ilike("canonical_name", ent.name).limit(1).single();
+                    if (byName) entEntityId = byName.id;
+                  }
+
+                  if (entEntityId) {
                     await db.from("case_entities").upsert(
-                      { case_id: caseId, entity_id: existing.id, role: ent.role || "mentioned" },
+                      { case_id: caseId, entity_id: entEntityId, role: ent.role || "mentioned" },
                       { onConflict: "case_id,entity_id" }
                     );
                   } else {
-                    const { data: newEnt } = await db.from("entities").insert({
-                      user_id: userId,
-                      type: ent.type || "person",
-                      canonical_name: ent.name,
-                      status: "active",
+                    const insertData: Record<string, unknown> = {
+                      user_id: userId, type: ent.type || "person",
+                      canonical_name: ent.name, status: "active",
                       phone: ent.phone || null,
-                    }).select("id").single();
+                    };
+                    if (entWaJid) insertData.wa_jid = entWaJid;
+
+                    const { data: newEnt } = await db.from("entities").insert(insertData).select("id").single();
                     if (newEnt) {
+                      entEntityId = newEnt.id;
                       await db.from("case_entities").upsert(
                         { case_id: caseId, entity_id: newEnt.id, role: ent.role || "mentioned" },
                         { onConflict: "case_id,entity_id" }
                       );
                     }
+                  }
+
+                  // Link signal to entity via signal_entities
+                  if (entEntityId) {
+                    await db.from("signal_entities").upsert(
+                      { signal_id: decision.signal_id, entity_id: entEntityId, resolution_method: "triage" },
+                      { onConflict: "signal_id,entity_id" }
+                    );
                   }
                 } catch { /* entity creation is best-effort */ }
               }
@@ -322,7 +360,8 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       .limit(20);
 
     const sigList = (signals || []).map(m => ({
-      sender: m.sender_identifier || m.raw_payload?.sender_name || "Unknown",
+      sender_id: m.sender_identifier || "Unknown",
+      sender_name: m.raw_payload?.sender_name || m.sender_identifier || "Unknown",
       content: m.raw_payload?.content || JSON.stringify(m.raw_payload),
       timestamp: m.occurred_at,
     }));
@@ -402,9 +441,9 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
       });
     }
 
-    // 6.5 Get existing entities
+    // 6.5 Get existing entities + build dossiers for LLM context
     const { data: existingCaseEntities } = await db.from("case_entities")
-      .select("entities(canonical_name, type)")
+      .select("entity_id, entities(canonical_name, type)")
       .eq("case_id", caseId);
     const existingEntityNames = (existingCaseEntities || [])
       .map((ce: Record<string, unknown>) => {
@@ -412,6 +451,14 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
         return ent?.canonical_name;
       })
       .filter(Boolean) as string[];
+
+    // Build entity dossiers for case scan context
+    const caseEntityIds = (existingCaseEntities || [])
+      .map((ce: Record<string, unknown>) => ce.entity_id as string)
+      .filter(Boolean);
+    const caseDossiersText = caseEntityIds.length > 0
+      ? await buildBatchDossiers(db, caseEntityIds)
+      : "";
 
     // 6.6 Get open tasks for this case
     const { data: openTasks } = await db.from("tasks")
@@ -455,12 +502,12 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
 
     // Append extra context to signal list if available
     if (extraConversationContext) {
-      sigList.push({ sender: "SYSTEM", content: extraConversationContext, timestamp: new Date().toISOString() });
+      sigList.push({ sender_id: "SYSTEM", sender_name: "SYSTEM", content: extraConversationContext, timestamp: new Date().toISOString() });
     }
 
     // 7. Call agent
     const { response, raw, tokens, durationMs, skillsPulled } = await callAgent(
-      contextPrompt, sigList, openCases, skills, pulledInstructions, existingEntityNames, previousSummary, openTasks || []
+      contextPrompt, sigList, openCases, skills, pulledInstructions, existingEntityNames, previousSummary, openTasks || [], caseDossiersText
     );
 
     // 8. Second pass for pulled skills
@@ -477,7 +524,7 @@ export async function scanCase(db: SupabaseClient, caseId: string, userId: strin
 
       const secondPass = await callAgent(
         contextPrompt, sigList, openCases, skills,
-        [...pulledInstructions, ...newPulledInstructions], existingEntityNames, previousSummary, openTasks || []
+        [...pulledInstructions, ...newPulledInstructions], existingEntityNames, previousSummary, openTasks || [], caseDossiersText
       );
 
       finalResponse = secondPass.response;
@@ -607,13 +654,34 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
             results.push({ type: cmd.type, status: "skipped", detail: "name too short" });
             break;
           }
-          // Check for existing entity (dedup by name)
-          const { data: existing } = await db.from("entities")
-            .select("id").eq("user_id", userId)
-            .or(`canonical_name.ilike.${normalized},canonical_name.ilike.%${normalized}%`)
-            .limit(1);
-          if (existing && existing.length > 0) {
-            await db.from("case_entities").upsert({ case_id: caseId, entity_id: existing[0].id, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
+
+          // Check for existing entity: first by wa_jid (strongest), then by name
+          const cmdWaJid = "wa_jid" in cmd ? cmd.wa_jid : undefined;
+          const cmdTgUserId = "tg_user_id" in cmd ? cmd.tg_user_id : undefined;
+          let existingId: string | null = null;
+
+          if (cmdWaJid) {
+            const { data: byJid } = await db.from("entities")
+              .select("id").eq("user_id", userId).eq("wa_jid", cmdWaJid).limit(1).single();
+            if (byJid) existingId = byJid.id;
+          }
+          if (!existingId && cmdTgUserId) {
+            const { data: byTg } = await db.from("entities")
+              .select("id").eq("user_id", userId).eq("tg_user_id", cmdTgUserId).limit(1).single();
+            if (byTg) existingId = byTg.id;
+          }
+          if (!existingId) {
+            const { data: byName } = await db.from("entities")
+              .select("id").eq("user_id", userId)
+              .or(`canonical_name.ilike.${normalized},canonical_name.ilike.%${normalized}%`)
+              .limit(1);
+            if (byName && byName.length > 0) existingId = byName[0].id;
+          }
+
+          let entityId: string;
+          if (existingId) {
+            entityId = existingId;
+            await db.from("case_entities").upsert({ case_id: caseId, entity_id: existingId, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
             results.push({ type: cmd.type, status: "linked_existing", detail: normalized });
           } else {
             // Validate entity_type against entity_types table (fallback to "other")
@@ -625,34 +693,56 @@ async function executeCommands(db: SupabaseClient, caseId: string, userId: strin
             const insertData: Record<string, unknown> = {
               user_id: userId, type: entityType, canonical_name: normalized, status: "active",
             };
-            // Add optional contact fields if provided
             if ("phone" in cmd && cmd.phone) insertData.phone = cmd.phone;
             if ("email" in cmd && cmd.email) insertData.email = cmd.email;
             if ("whatsapp_number" in cmd && cmd.whatsapp_number) insertData.whatsapp_number = cmd.whatsapp_number;
             if ("telegram_handle" in cmd && cmd.telegram_handle) insertData.telegram_handle = cmd.telegram_handle;
+            if (cmdWaJid) insertData.wa_jid = cmdWaJid;
+            if (cmdTgUserId) insertData.tg_user_id = cmdTgUserId;
 
             const { data: ne } = await db.from("entities").insert(insertData).select("id").single();
+            entityId = ne?.id || "";
             if (ne) await db.from("case_entities").upsert({ case_id: caseId, entity_id: ne.id, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
             results.push({ type: cmd.type, status: "created", detail: normalized });
+          }
+
+          // Create signal_entities links for all case signals
+          if (entityId) {
+            const resMethod = cmd.type === "create_entity" ? "scan" : "triage";
+            const { data: caseSignals } = await db.from("signals").select("id").eq("case_id", caseId);
+            for (const sig of caseSignals || []) {
+              await db.from("signal_entities").upsert(
+                { signal_id: sig.id, entity_id: entityId, resolution_method: resMethod },
+                { onConflict: "signal_id,entity_id" }
+              );
+            }
           }
           break;
         }
         case "attach_entity": {
           // Link an existing entity to this case — no creation
-          let entityId = cmd.entity_id;
-          if (!entityId && cmd.name) {
+          let attachEntityId = cmd.entity_id;
+          if (!attachEntityId && cmd.name) {
             const { data: found } = await db.from("entities")
               .select("id").eq("user_id", userId)
               .ilike("canonical_name", cmd.name.trim())
               .limit(1).single();
-            entityId = found?.id;
+            attachEntityId = found?.id;
           }
-          if (!entityId) {
+          if (!attachEntityId) {
             results.push({ type: "attach_entity", status: "not_found", detail: cmd.name || cmd.entity_id || "no identifier" });
             break;
           }
-          await db.from("case_entities").upsert({ case_id: caseId, entity_id: entityId, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
-          results.push({ type: "attach_entity", status: "linked", detail: entityId });
+          await db.from("case_entities").upsert({ case_id: caseId, entity_id: attachEntityId, role: cmd.role || "mentioned" }, { onConflict: "case_id,entity_id" });
+          // Create signal_entities links for case signals
+          const { data: attachSignals } = await db.from("signals").select("id").eq("case_id", caseId);
+          for (const sig of attachSignals || []) {
+            await db.from("signal_entities").upsert(
+              { signal_id: sig.id, entity_id: attachEntityId, resolution_method: "scan" },
+              { onConflict: "signal_id,entity_id" }
+            );
+          }
+          results.push({ type: "attach_entity", status: "linked", detail: attachEntityId });
           break;
         }
         case "merge_into": {

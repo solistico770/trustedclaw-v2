@@ -15,6 +15,7 @@ type ApiKey = { id: string; name: string; key_prefix: string; scopes: string[]; 
 
 const TABS = [
   { key: "gates", label: "Gates" },
+  { key: "telegram", label: "Telegram Bot" },
   { key: "prompt", label: "Context Prompt" },
   { key: "skills", label: "Skills" },
   { key: "api-keys", label: "API Keys" },
@@ -22,6 +23,13 @@ const TABS = [
 
 export default function SettingsPage() {
   const [tab, setTab] = useState("gates");
+
+  // Read ?tab= from URL on mount (avoids Suspense requirement for useSearchParams)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("tab");
+    if (t && TABS.some(tab => tab.key === t)) setTab(t);
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -35,9 +43,159 @@ export default function SettingsPage() {
         ))}
       </div>
       {tab === "gates" && <GatesTab />}
+      {tab === "telegram" && <TelegramBotTab />}
       {tab === "prompt" && <PromptTab />}
       {tab === "skills" && <SkillsTab />}
       {tab === "api-keys" && <ApiKeysTab />}
+    </div>
+  );
+}
+
+// ─── TELEGRAM BOT TAB ───
+function TelegramBotTab() {
+  const [token, setToken] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [connecting, setConnecting] = useState(false);
+  const [status, setStatus] = useState<{
+    connected: boolean;
+    bot_username?: string;
+    bot_name?: string;
+    bot_id?: string;
+    gate_id?: string;
+  } | null>(null);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/telegram/setup");
+      if (res.ok) setStatus(await res.json());
+    } catch {}
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function connect() {
+    if (!token.trim()) return;
+    setConnecting(true);
+    setError("");
+    try {
+      const res = await fetch("/api/telegram/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bot_token: token }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Failed to connect"); return; }
+      setToken("");
+      load();
+    } catch (e) {
+      setError("Network error");
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function disconnect() {
+    await fetch("/api/telegram/setup", { method: "DELETE" });
+    setStatus(null);
+    load();
+  }
+
+  if (loading) {
+    return <div className="space-y-3 animate-pulse"><div className="h-32 rounded-xl bg-card" /><div className="h-20 rounded-xl bg-card" /></div>;
+  }
+
+  const isConnected = status?.connected && status.bot_username;
+  const botLink = status?.bot_username ? `https://t.me/${status.bot_username}` : "";
+  // QR code via Google Charts API — encodes the t.me link
+  const qrUrl = botLink ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(botLink)}` : "";
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      {isConnected ? (
+        <>
+          {/* Connected state */}
+          <Card className="border-green-500/30 bg-green-500/5">
+            <CardContent className="p-5">
+              <div className="flex items-start gap-4">
+                {/* QR Code */}
+                {qrUrl && (
+                  <div className="shrink-0">
+                    <div className="w-[140px] h-[140px] rounded-xl bg-white p-2 shadow-sm">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={qrUrl} alt="Telegram QR" width={124} height={124} className="rounded-lg" />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground text-center mt-1.5">Scan to open bot</p>
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
+                    <span className="text-sm font-semibold text-green-600 dark:text-green-400">Connected</span>
+                  </div>
+                  <h3 className="text-lg font-bold">{status.bot_name}</h3>
+                  <p className="text-sm text-muted-foreground">@{status.bot_username}</p>
+                  <a href={botLink} target="_blank" rel="noopener noreferrer"
+                    className="inline-block mt-2 text-xs text-primary hover:underline">{botLink}</a>
+
+                  <div className="mt-4 p-3 rounded-lg bg-card border border-border">
+                    <p className="text-xs font-medium mb-1">Available commands:</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground font-mono">
+                      <span>/cases</span><span>List open cases</span>
+                      <span>/case 12</span><span>Case details</span>
+                      <span>/create Title</span><span>New case</span>
+                      <span>/close 12</span><span>Close case</span>
+                      <span>/scan 12</span><span>Rescan case</span>
+                      <span>/entities</span><span>List entities</span>
+                      <span>/tasks</span><span>Open tasks</span>
+                      <span>/stats</span><span>Dashboard</span>
+                    </div>
+                  </div>
+
+                  <Button size="sm" variant="ghost" className="mt-3 text-destructive text-xs" onClick={disconnect}>
+                    Disconnect Bot
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      ) : (
+        <>
+          {/* Setup state */}
+          <Card>
+            <CardContent className="p-5 space-y-4">
+              <div>
+                <h3 className="text-sm font-semibold mb-1">Connect Telegram Bot</h3>
+                <p className="text-xs text-muted-foreground">
+                  Create a bot with <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">@BotFather</a> on Telegram, then paste the token here.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  value={token}
+                  onChange={e => setToken(e.target.value)}
+                  placeholder="123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+                  className="h-9 text-sm font-mono"
+                  type="password"
+                />
+                <Button onClick={connect} disabled={!token.trim() || connecting} className="h-9 px-4">
+                  {connecting ? "Connecting..." : "Connect"}
+                </Button>
+              </div>
+              {error && <p className="text-xs text-destructive">{error}</p>}
+            </CardContent>
+          </Card>
+          <div className="text-xs text-muted-foreground space-y-1 px-1">
+            <p><strong>How it works:</strong></p>
+            <p>1. The bot registers a webhook to receive messages</p>
+            <p>2. You can send commands to manage cases, entities, and tasks</p>
+            <p>3. Free text messages are ingested as signals for the agent</p>
+            <p>4. A QR code will appear so you can quickly open the bot chat</p>
+          </div>
+        </>
+      )}
     </div>
   );
 }

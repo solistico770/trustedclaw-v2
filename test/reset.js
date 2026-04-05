@@ -13,6 +13,14 @@ const db = createClient(
   { auth: { persistSession: false } }
 );
 
+async function wipe(table, filter) {
+  console.log(`  deleting ${table}...`);
+  const q = typeof filter === "function" ? filter(db.from(table).delete()) : db.from(table).delete().eq("user_id", filter);
+  const { error, count } = await q;
+  if (error) console.error(`  ✗ ${table}:`, error.message);
+  else console.log(`  ✓ ${table} done`);
+}
+
 async function main() {
   const { data: profiles } = await db.from("profiles").select("id, role");
   if (!profiles?.length) { console.error("No users found. Sign up first."); return; }
@@ -24,34 +32,38 @@ async function main() {
   console.log("\n--- Wiping signals, cases, entities, tasks ---");
 
   // 1. Clear admin_entity_id FK on user_settings
-  await db.from("user_settings").update({ admin_entity_id: null }).eq("user_id", userId);
+  console.log("  clearing admin_entity_id...");
+  const { error: settErr } = await db.from("user_settings").update({ admin_entity_id: null }).eq("user_id", userId);
+  if (settErr) console.error("  ✗ user_settings:", settErr.message);
+  else console.log("  ✓ user_settings done");
 
-  // 2. Audit + events + scan logs
-  await db.from("audit_logs").delete().eq("user_id", userId);
-  await db.from("case_events").delete().eq("user_id", userId);
-  await db.from("scan_logs").delete().eq("user_id", userId);
+  // 2. Leaf tables (no dependents) — parallel
+  await Promise.all([
+    wipe("audit_logs", userId),
+    wipe("case_events", userId),
+    wipe("scan_logs", userId),
+    wipe("listener_responses", userId),
+    wipe("tasks", userId),
+  ]);
 
-  // 3. Listener commands + responses (stale commands)
-  await db.from("listener_responses").delete().eq("user_id", userId);
-  await db.from("listener_commands").delete().eq("user_id", userId);
+  // 3. listener_commands (after responses cleared)
+  await wipe("listener_commands", userId);
 
-  // 4. Tasks (has entity_id FK)
-  await db.from("tasks").delete().eq("user_id", userId);
-
-  // 5. case_entities junction
+  // 4. case_entities junction — bulk delete via case IDs
   const { data: userCases } = await db.from("cases").select("id").eq("user_id", userId);
-  for (const c of userCases || []) {
-    await db.from("case_entities").delete().eq("case_id", c.id);
+  const caseIds = (userCases || []).map(c => c.id);
+  if (caseIds.length) {
+    await wipe("case_entities", q => q.in("case_id", caseIds));
   }
 
-  // 6. Signals
-  await db.from("signals").delete().eq("user_id", userId);
+  // 5. Signals + Cases (after junctions cleared) — parallel
+  await Promise.all([
+    wipe("signals", userId),
+    wipe("cases", userId),
+  ]);
 
-  // 7. Cases
-  await db.from("cases").delete().eq("user_id", userId);
-
-  // 8. Entities
-  await db.from("entities").delete().eq("user_id", userId);
+  // 6. Entities (after tasks + cases cleared)
+  await wipe("entities", userId);
 
   // Verify
   const { count: sigCount } = await db.from("signals").select("*", { count: "exact", head: true }).eq("user_id", userId);

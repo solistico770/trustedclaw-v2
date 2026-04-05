@@ -1,26 +1,24 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@/lib/supabase-browser";
-import { LayoutDashboard, ClipboardList, Users, FlaskConical, Cpu, Settings, LogOut, ChevronUp, UserCog, Radio, CheckSquare } from "lucide-react";
+import { LogOut, ChevronUp, Settings, Cpu, FlaskConical, UserCog, Send } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
+import Link from "next/link";
 import {
-  Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
-  SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem,
+  Sidebar, SidebarContent, SidebarFooter,
+  SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem,
+  SidebarGroup, SidebarGroupContent,
 } from "@/components/ui/sidebar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
-const nav = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/cases", label: "Cases", icon: ClipboardList },
-  { href: "/signals", label: "Signals", icon: Radio },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare },
-  { href: "/entities", label: "Entities", icon: Users },
+// Secondary nav items that don't belong in the main toolbar
+const secondaryNav = [
   { href: "/simulate", label: "Simulate", icon: FlaskConical },
   { href: "/scan-monitor", label: "Scanner", icon: Cpu },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/settings/users", label: "Users", icon: UserCog },
+  { href: "/settings?tab=telegram", label: "Telegram Bot", icon: Send },
 ];
 
 function deployAge() {
@@ -33,8 +31,7 @@ function deployAge() {
   return `${Math.round(min / 1440)}d`;
 }
 
-export function AppSidebar({ caseCount, userEmail }: { caseCount?: number; userEmail?: string }) {
-  const pathname = usePathname();
+export function AppSidebar({ userEmail }: { caseCount?: number; userEmail?: string }) {
   const router = useRouter();
   const supabase = createBrowserClient();
 
@@ -63,24 +60,14 @@ export function AppSidebar({ caseCount, userEmail }: { caseCount?: number; userE
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {nav.map((item) => {
-                const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
-                return (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      isActive={active}
-                      tooltip={item.label}
-                      render={<Link href={item.href} />}
-                    >
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                    {item.href === "/cases" && caseCount ? (
-                      <SidebarMenuBadge>{caseCount}</SidebarMenuBadge>
-                    ) : null}
-                  </SidebarMenuItem>
-                );
-              })}
+              {secondaryNav.map(item => (
+                <SidebarMenuItem key={item.href}>
+                  <SidebarMenuButton tooltip={item.label} render={<Link href={item.href} />}>
+                    <item.icon />
+                    <span>{item.label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
